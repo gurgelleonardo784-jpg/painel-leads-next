@@ -1,0 +1,49 @@
+[
+  {
+    "slug": "acme",
+    "nome": "ACME Consultoria",
+    "senha": "acme2026",
+    "spreadsheetId": "1AbCdEfGhIjKlMnOpQrStUvWxYz-EXEMPLO",
+    "aba": "Leads",
+    "titulo": "Painel de Leads da ACME",
+    "ddiPadrao": "55",
+    "chaveWebhook": "chave-secreta-acme",
+    "status": ["Novo", "Em contato", "Qualificado", "Ganho", "Perdido"],
+
+    "metaLeadgen": {
+      "pageId": "1234567890",
+      "pageAccessToken": "EAAG...token-da-pagina-com-leads_retrieval"
+    },
+
+    "conversoes": {
+      "statusConversao": ["Em contato", "Qualificado", "Ganho", "Perdido"],
+
+      "meta": {
+        "datasetId": "1234567890",
+        "accessToken": "EAAG...token-de-usuario-do-sistema",
+        "testEventCode": "",
+        "eventos": {
+          "Em contato": "lead_contacted",
+          "Qualificado": "lead_qualified",
+          "Ganho": "lead_won",
+          "Perdido": "lead_disqualified"
+        }
+      },
+
+      "google": {
+        "developerToken": "SEU_DEVELOPER_TOKEN",
+        "clientId": "xxxx.apps.googleusercontent.com",
+        "clientSecret": "GOCSPX-xxxx",
+        "refreshToken": "1//0xxxx",
+        "customerId": "1234567890",
+        "loginCustomerId": "",
+        "conversoes": {
+          "Em contato": "customers/1234567890/conversionActions/111",
+          "Qualificado": "customers/1234567890/conversionActions/222",
+          "Ganho": "customers/1234567890/conversionActions/333",
+          "Perdido": "customers/1234567890/conversionActions/444"
+        }
+      }
+    }
+  }
+]

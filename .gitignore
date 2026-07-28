@@ -33,6 +33,9 @@ yarn-error.log*
 # env files (can opt-in for committing if needed)
 .env*
 
+# tenants (contém senhas e IDs de planilha dos clientes)
+/tenants.json
+
 # vercel
 .vercel
 

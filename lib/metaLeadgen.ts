@@ -1,0 +1,74 @@
+import crypto from "crypto";
+
+/**
+ * Recebimento direto de leads do Meta (formulário instantâneo / Lead Ads).
+ * A Meta manda uma notificação com o leadgen_id; aqui buscamos os dados
+ * completos na Graph API e montamos as colunas para gravar na planilha.
+ */
+
+const GRAPH = "https://graph.facebook.com/v21.0";
+
+type LeadMetaCru = {
+  id?: string;
+  field_data?: { name: string; values?: string[] }[];
+  campaign_name?: string;
+  ad_name?: string;
+  adset_name?: string;
+  platform?: string;
+  created_time?: string;
+  error?: { message?: string };
+};
+
+/** Dá nomes amigáveis aos campos padrão do Meta; mantém os demais como vieram. */
+function rotular(nome: string): string {
+  const mapa: Record<string, string> = {
+    full_name: "Nome",
+    first_name: "Nome",
+    last_name: "Sobrenome",
+    email: "Email",
+    phone_number: "Telefone",
+  };
+  return mapa[nome] || nome;
+}
+
+/** Busca o lead na Graph API e devolve as colunas prontas para gravarLeadWebhook. */
+export async function buscarLeadMeta(
+  pageAccessToken: string,
+  leadgenId: string
+): Promise<Record<string, string>> {
+  const campos = "field_data,campaign_name,ad_name,adset_name,platform,created_time";
+  const url = `${GRAPH}/${leadgenId}?fields=${campos}&access_token=${encodeURIComponent(pageAccessToken)}`;
+
+  const res = await fetch(url);
+  const lead = (await res.json().catch(() => null)) as LeadMetaCru | null;
+  if (!res.ok || !lead) {
+    throw new Error(lead?.error?.message || `Graph API HTTP ${res.status}`);
+  }
+
+  const dados: Record<string, string> = {};
+  (lead.field_data || []).forEach((f) => {
+    const valor = (f.values || []).join(", ");
+    if (valor) dados[rotular(f.name)] = valor;
+  });
+
+  dados["Lead ID"] = String(lead.id || leadgenId);
+  dados["Origem"] =
+    lead.platform === "ig" ? "Instagram" : lead.platform === "fb" ? "Facebook" : "Meta";
+  if (lead.campaign_name) dados["Campanha"] = lead.campaign_name;
+
+  return dados;
+}
+
+/** Valida o cabeçalho X-Hub-Signature-256 enviado pela Meta (HMAC do app secret). */
+export function assinaturaValida(
+  appSecret: string,
+  assinatura: string | null,
+  corpoBruto: string
+): boolean {
+  if (!assinatura) return false;
+  const esperado =
+    "sha256=" + crypto.createHmac("sha256", appSecret).update(corpoBruto, "utf8").digest("hex");
+  const a = Buffer.from(assinatura);
+  const b = Buffer.from(esperado);
+  return a.length === b.length && crypto.timingSafeEqual(a, b);
+}
