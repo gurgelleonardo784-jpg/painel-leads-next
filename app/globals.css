@@ -390,3 +390,128 @@ textarea {
     grid-template-columns: 1fr;
   }
 }
+
+/* ---------- Painel de administração ---------- */
+.btn-primario {
+  background: var(--acc);
+  color: #fff;
+  border-color: var(--acc);
+}
+.btn-primario:hover {
+  background: #1e55d6;
+}
+.btn-perigo {
+  color: #b91c1c;
+}
+.btn-perigo:hover {
+  background: #fdeceb;
+  border-color: #f6c9c6;
+}
+
+.aviso-ro {
+  max-width: 1240px;
+  margin: 0 auto 16px;
+  background: #fff7e6;
+  border: 1px solid #f5d99a;
+  color: #92600a;
+  padding: 12px 14px;
+  border-radius: 10px;
+  font-size: 13px;
+}
+
+.admin-form {
+  margin-bottom: 18px;
+}
+.admin-form h3 {
+  margin: 0 0 12px;
+  font-size: 15.5px;
+  font-weight: 650;
+}
+.form-grid {
+  display: grid;
+  gap: 12px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+.campo {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+.campo > span {
+  font-size: 12px;
+  color: var(--txt2);
+  font-weight: 600;
+}
+.campo-full {
+  grid-column: 1 / -1;
+}
+.form-acoes {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  margin-top: 6px;
+}
+
+.admin-lista {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.cliente {
+  flex-direction: row;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  flex-wrap: wrap;
+}
+.cliente-info {
+  min-width: 0;
+}
+.cliente h3 {
+  margin: 0 0 7px;
+}
+.cliente-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+  font-size: 12.5px;
+}
+.cliente-meta a {
+  color: var(--acc);
+  font-weight: 550;
+  word-break: break-all;
+}
+.tag {
+  background: #f1f3f7;
+  color: var(--txt2);
+  border-radius: 999px;
+  padding: 3px 9px;
+  font-size: 11.5px;
+}
+.tag-ok {
+  background: #eef9f2;
+  color: #15803d;
+}
+.tag-off {
+  background: #fdeceb;
+  color: #b91c1c;
+}
+.cliente-acoes {
+  display: flex;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+@media (max-width: 640px) {
+  .form-grid {
+    grid-template-columns: 1fr;
+  }
+  .cliente {
+    flex-direction: column;
+    align-items: stretch;
+  }
+  .cliente-acoes {
+    flex-wrap: wrap;
+  }
+}

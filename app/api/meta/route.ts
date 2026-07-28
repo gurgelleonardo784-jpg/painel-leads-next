@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { getTenantPorPagina } from "@/lib/tenants";
-import { buscarLeadMeta, assinaturaValida } from "@/lib/metaLeadgen";
+import { buscarLeadMeta, conferirWebhookMeta } from "@/lib/metaLeadgen";
 import { gravarLeadWebhook } from "@/lib/sheets";
 
 /**
@@ -17,6 +17,10 @@ export async function GET(req: Request) {
   const mode = sp.get("hub.mode");
   const token = sp.get("hub.verify_token");
   const challenge = sp.get("hub.challenge");
+
+  if (!process.env.META_VERIFY_TOKEN) {
+    console.error("Meta leadgen: META_VERIFY_TOKEN não definido — verificação vai falhar.");
+  }
 
   if (mode === "subscribe" && token && token === process.env.META_VERIFY_TOKEN) {
     return new Response(challenge || "", {
@@ -35,14 +39,8 @@ type Entrada = {
 export async function POST(req: Request) {
   const corpoBruto = await req.text();
 
-  // valida a assinatura (se o app secret estiver configurado)
-  const appSecret = process.env.META_APP_SECRET;
-  if (appSecret) {
-    const assinatura = req.headers.get("x-hub-signature-256");
-    if (!assinaturaValida(appSecret, assinatura, corpoBruto)) {
-      return NextResponse.json({ ok: false, erro: "assinatura" }, { status: 403 });
-    }
-  }
+  const recusa = conferirWebhookMeta(req, corpoBruto, "Meta leadgen");
+  if (recusa) return recusa;
 
   let corpo: { object?: string; entry?: Entrada[] };
   try {

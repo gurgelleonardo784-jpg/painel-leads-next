@@ -15,6 +15,10 @@
       "pageAccessToken": "EAAG...token-da-pagina-com-leads_retrieval"
     },
 
+    "whatsapp": {
+      "phoneNumberId": "1234567890"
+    },
+
     "conversoes": {
       "statusConversao": ["Em contato", "Qualificado", "Ganho", "Perdido"],
 

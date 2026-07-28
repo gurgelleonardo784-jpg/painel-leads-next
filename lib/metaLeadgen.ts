@@ -72,3 +72,35 @@ export function assinaturaValida(
   const b = Buffer.from(esperado);
   return a.length === b.length && crypto.timingSafeEqual(a, b);
 }
+
+/**
+ * Porteiro dos webhooks da Meta (`/api/meta` e `/api/whatsapp`).
+ *
+ * Sem `META_APP_SECRET` não há como saber se o POST veio mesmo da Meta — e o
+ * endpoint é público e grava na planilha do cliente. Por isso, em produção a
+ * ausência do segredo **recusa** a requisição em vez de deixar passar. Em
+ * desenvolvimento passa, com aviso no console, para dar para testar com curl.
+ *
+ * Retorna null quando está tudo certo, ou a resposta de recusa.
+ */
+export function conferirWebhookMeta(
+  req: Request,
+  corpoBruto: string,
+  rotulo: string
+): Response | null {
+  const appSecret = process.env.META_APP_SECRET;
+
+  if (!appSecret) {
+    if (process.env.NODE_ENV === "production") {
+      console.error(`${rotulo}: META_APP_SECRET ausente — webhook recusado.`);
+      return Response.json({ ok: false, erro: "config" }, { status: 503 });
+    }
+    console.warn(`${rotulo}: META_APP_SECRET ausente — assinatura NÃO verificada (dev).`);
+    return null;
+  }
+
+  if (!assinaturaValida(appSecret, req.headers.get("x-hub-signature-256"), corpoBruto)) {
+    return Response.json({ ok: false, erro: "assinatura" }, { status: 403 });
+  }
+  return null;
+}

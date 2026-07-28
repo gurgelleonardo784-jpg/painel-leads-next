@@ -55,10 +55,27 @@ async function main() {
   email ? ok("GOOGLE_SERVICE_ACCOUNT_EMAIL definido") : falta("GOOGLE_SERVICE_ACCOUNT_EMAIL vazio");
   key ? ok("GOOGLE_PRIVATE_KEY definido") : falta("GOOGLE_PRIVATE_KEY vazio");
   process.env.SESSION_SECRET ? ok("SESSION_SECRET definido") : falta("SESSION_SECRET vazio");
+  process.env.ADMIN_SENHA ? ok("ADMIN_SENHA definido") : falta("ADMIN_SENHA vazio (a tela /admin não abre)");
+
+  titulo("1b. Webhooks da Meta (só se for receber lead do Meta/WhatsApp)");
+  process.env.META_APP_SECRET
+    ? ok("META_APP_SECRET definido (assinatura dos webhooks é verificada)")
+    : aviso("META_APP_SECRET vazio — em produção /api/meta e /api/whatsapp respondem 503");
+  process.env.META_VERIFY_TOKEN
+    ? ok("META_VERIFY_TOKEN definido")
+    : aviso("META_VERIFY_TOKEN vazio — o Meta não consegue verificar /api/meta");
+  process.env.META_WHATSAPP_VERIFY_TOKEN
+    ? ok("META_WHATSAPP_VERIFY_TOKEN definido")
+    : aviso("META_WHATSAPP_VERIFY_TOKEN vazio — o Meta não consegue verificar /api/whatsapp");
 
   const tenants = carregarTenants();
   titulo(`2. Tenants (${tenants.length} encontrado(s))`);
   if (!tenants.length) { falta("Nenhum tenant em tenants.json / TENANTS"); return; }
+
+  // dois clientes com o mesmo número roteariam o lead para a planilha errada
+  const numeros = tenants.map((t) => t.whatsapp && t.whatsapp.phoneNumberId).filter(Boolean);
+  const repetidos = numeros.filter((n, i) => numeros.indexOf(n) !== i);
+  if (repetidos.length) falta(`phoneNumberId repetido em mais de um cliente: ${[...new Set(repetidos)].join(", ")}`);
 
   if (!email || !key) {
     aviso("Sem credenciais do Google, não dá para testar a planilha. Preencha o .env.local e rode de novo.");
@@ -98,9 +115,25 @@ async function main() {
     temIdSistema ? ok('Coluna "ID" (interna) presente') : aviso('Coluna "ID" será criada no 1º acesso ao painel');
 
     const colLeadId = cab.find((h) => h !== "ID" && ["id", "lead id", "leadid", "leadgen id"].includes(normal(h)));
-    colLeadId
-      ? ok(`Lead ID do Meta detectado na coluna "${colLeadId}"`)
-      : falta('Nenhuma coluna de Lead ID do Meta (ex.: "id"). Sem ela a conversão não volta pro Meta — renomeie a coluna do id para "Lead ID".');
+    const colCtwa = cab.find((h) => normal(h) === "ctwa clid");
+    const temWhats = !!(t.whatsapp && t.whatsapp.phoneNumberId);
+
+    if (colLeadId) ok(`Lead ID do Meta detectado na coluna "${colLeadId}"`);
+    else if (temWhats) aviso('Sem coluna de Lead ID — ok se os leads vêm só do WhatsApp (atribuição pelo ctwa_clid)');
+    else falta('Nenhuma coluna de Lead ID do Meta (ex.: "id"). Sem ela a conversão não volta pro Meta — renomeie a coluna do id para "Lead ID".');
+
+    // WhatsApp (Click-to-WhatsApp)
+    if (temWhats) {
+      ok(`WhatsApp: phoneNumberId ${t.whatsapp.phoneNumberId}`);
+      colCtwa
+        ? ok(`Coluna "${colCtwa}" presente (atribuição do Click-to-WhatsApp)`)
+        : aviso('Coluna "ctwa_clid" será criada no 1º lead que vier de um anúncio Click-to-WhatsApp');
+      // mesma regra do mapearCabecalho_ em lib/sheets.ts
+      const colTel = cab.find((h) => /(telefone|whats|celular|phone|fone|^numero)/.test(normal(h)));
+      colTel
+        ? ok(`Coluna de telefone "${colTel}" — usada para não duplicar o mesmo contato`)
+        : falta("Sem coluna de telefone reconhecível: cada mensagem viraria um lead novo. Nomeie a coluna como \"Telefone\".");
+    }
 
     // conversões (Meta)
     const meta = t.conversoes && t.conversoes.meta;

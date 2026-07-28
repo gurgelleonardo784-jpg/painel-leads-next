@@ -17,6 +17,10 @@
  * }
  */
 
+import fs from "node:fs";
+import path from "node:path";
+import crypto from "node:crypto";
+
 import type { TenantPublico } from "./types";
 export type { TenantPublico } from "./types";
 
@@ -26,6 +30,7 @@ export type MetaConfig = {
   accessToken: string; // token de usuário do sistema
   eventos: Record<string, string>; // status do painel -> nome do evento na Meta
   testEventCode?: string; // opcional, para testar no Events Manager
+  leadEventSource?: string; // nome do CRM enviado em custom_data.lead_event_source
 };
 
 /** Envio de conversão para o Google Ads (upload de click conversions). */
@@ -51,6 +56,11 @@ export type MetaLeadgenConfig = {
   pageAccessToken: string; // token da Página com permissão leads_retrieval
 };
 
+/** Captura de leads do WhatsApp Cloud API (anúncios Click-to-WhatsApp). */
+export type WhatsappConfig = {
+  phoneNumberId: string; // ID do número na Cloud API; roteia o webhook para este tenant
+};
+
 export type Tenant = {
   slug: string;
   nome: string;
@@ -64,6 +74,7 @@ export type Tenant = {
   tz: string;
   conversoes?: ConversoesConfig;
   metaLeadgen?: MetaLeadgenConfig;
+  whatsapp?: WhatsappConfig;
 };
 
 const STATUS_PADRAO = ["Novo", "Em contato", "Qualificado", "Ganho", "Perdido"];
@@ -82,6 +93,7 @@ function normalizarTenant(raw: Record<string, unknown>): Tenant {
     tz: String(raw.tz || process.env.TZ || "America/Sao_Paulo"),
     conversoes: raw.conversoes ? (raw.conversoes as ConversoesConfig) : undefined,
     metaLeadgen: raw.metaLeadgen ? (raw.metaLeadgen as MetaLeadgenConfig) : undefined,
+    whatsapp: raw.whatsapp ? (raw.whatsapp as WhatsappConfig) : undefined,
   };
 }
 
@@ -101,9 +113,6 @@ function carregar(): Tenant[] {
   } else {
     // fallback: tenants.json na raiz (desenvolvimento)
     try {
-      // require dinâmico evita quebrar o bundle quando o arquivo não existe
-      const fs = require("fs") as typeof import("fs");
-      const path = require("path") as typeof import("path");
       const arquivo = path.join(process.cwd(), "tenants.json");
       if (fs.existsSync(arquivo)) {
         bruto = JSON.parse(fs.readFileSync(arquivo, "utf8"));
@@ -131,6 +140,11 @@ export function getTenantPorPagina(pageId: string): Tenant | null {
   return carregar().find((t) => t.metaLeadgen && t.metaLeadgen.pageId === pageId) || null;
 }
 
+export function getTenantPorTelefoneWhatsApp(phoneNumberId: string): Tenant | null {
+  if (!phoneNumberId) return null;
+  return carregar().find((t) => t.whatsapp && t.whatsapp.phoneNumberId === phoneNumberId) || null;
+}
+
 export function toPublico(t: Tenant): TenantPublico {
   return {
     slug: t.slug,
@@ -138,4 +152,128 @@ export function toPublico(t: Tenant): TenantPublico {
     status: t.status,
     exigeSenha: !!t.senha,
   };
+}
+
+/* ---------- escrita / administração (cadastro de clientes) ----------
+ *
+ * Hoje persiste no arquivo tenants.json (bom para desenvolvimento local).
+ * No deploy (Vercel) o disco é efêmero: trocar `persistir`/`carregar` por um
+ * banco (Postgres/Neon) mantendo estas mesmas funções. Se TENANTS vier por
+ * variável de ambiente, o cadastro fica somente-leitura.
+ */
+
+function persistir(lista: Tenant[]): void {
+  if (process.env.TENANTS) {
+    throw new Error(
+      "O cadastro está somente-leitura (TENANTS via variável de ambiente). Configure um banco para editar em produção."
+    );
+  }
+  fs.writeFileSync(
+    path.join(process.cwd(), "tenants.json"),
+    JSON.stringify(lista, null, 2) + "\n",
+    "utf8"
+  );
+  cache = null; // invalida o cache para a próxima leitura reler do disco
+}
+
+/** Normaliza um texto livre para um slug de URL: minúsculo, sem acento, com hífens. */
+export function normalizarSlug(s: string): string {
+  return String(s || "")
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/[̀-ͯ]/g, "")
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "");
+}
+
+function gerarChaveWebhook(): string {
+  return crypto.randomBytes(12).toString("hex");
+}
+
+export function listarTenants(): Tenant[] {
+  return carregar();
+}
+
+export function cadastroGravavel(): boolean {
+  return !process.env.TENANTS;
+}
+
+export function criarTenant(dados: Record<string, unknown>): Tenant {
+  const lista = carregar().slice();
+  const slug = normalizarSlug(String(dados.slug || dados.nome || ""));
+  if (!slug) throw new Error("Informe um nome/endereço válido para o cliente.");
+  if (lista.some((t) => t.slug === slug)) {
+    throw new Error(`Já existe um cliente com o endereço "${slug}".`);
+  }
+  const novo = normalizarTenant({ ...dados, slug });
+  if (!novo.chaveWebhook) novo.chaveWebhook = gerarChaveWebhook();
+  lista.push(novo);
+  persistir(lista);
+  return novo;
+}
+
+export function atualizarTenant(slug: string, dados: Record<string, unknown>): Tenant {
+  const lista = carregar().slice();
+  const i = lista.findIndex((t) => t.slug === slug);
+  if (i === -1) throw new Error("Cliente não encontrado.");
+  // o slug (link do cliente) não muda no update, para não quebrar o acesso dele
+  const atualizado = normalizarTenant({ ...lista[i], ...dados, slug });
+  lista[i] = atualizado;
+  persistir(lista);
+  return atualizado;
+}
+
+export function removerTenant(slug: string): void {
+  const lista = carregar();
+  if (!lista.some((t) => t.slug === slug)) throw new Error("Cliente não encontrado.");
+  persistir(lista.filter((t) => t.slug !== slug));
+}
+
+/**
+ * Converte os campos do formulário do admin no objeto do tenant. Se vier
+ * Dataset ID + Access Token do Meta, monta o bloco `conversoes.meta` completo
+ * com os eventos padrão (o admin não precisa configurar o mapeamento à mão).
+ * Quando os campos do Meta vêm vazios, `conversoes` não é incluído — no update
+ * isso preserva a configuração que já existia.
+ */
+export function montarDadosTenant(entrada: Record<string, unknown>): Record<string, unknown> {
+  const txt = (v: unknown) => String(v ?? "").trim();
+  const nome = txt(entrada.nome);
+  const titulo = txt(entrada.titulo) || (nome ? `Painel de Leads — ${nome}` : "Painel de Leads");
+
+  const dados: Record<string, unknown> = {
+    slug: entrada.slug,
+    nome,
+    titulo,
+    senha: String(entrada.senha ?? ""),
+    spreadsheetId: txt(entrada.spreadsheetId),
+    aba: txt(entrada.aba) || "Página1",
+    ddiPadrao: txt(entrada.ddiPadrao) || "55",
+    status: ["Novo", "Em contato", "Qualificado", "Ganho", "Perdido"],
+  };
+
+  const phoneNumberId = txt(entrada.whatsappPhoneNumberId);
+  if (phoneNumberId) dados.whatsapp = { phoneNumberId };
+
+  const datasetId = txt(entrada.metaDatasetId);
+  const accessToken = txt(entrada.metaAccessToken);
+  if (datasetId && accessToken) {
+    dados.conversoes = {
+      statusConversao: ["Em contato", "Qualificado", "Ganho", "Perdido"],
+      meta: {
+        datasetId,
+        accessToken,
+        testEventCode: "",
+        leadEventSource: titulo,
+        eventos: {
+          "Em contato": "lead_contacted",
+          Qualificado: "lead_qualified",
+          Ganho: "lead_won",
+          Perdido: "lead_disqualified",
+        },
+      },
+    };
+  }
+
+  return dados;
 }

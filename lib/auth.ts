@@ -9,6 +9,8 @@ import { getTenant, type Tenant } from "./tenants";
  */
 
 const COOKIE = "sessao";
+const COOKIE_ADMIN = "admin";
+const MARCA_ADMIN = "__admin__";
 const MAX_IDADE = 60 * 60 * 24 * 30; // 30 dias
 
 function segredo(): string {
@@ -49,6 +51,41 @@ export async function criarSessao(slug: string): Promise<void> {
 export async function encerrarSessao(): Promise<void> {
   const jar = await cookies();
   jar.delete(COOKIE);
+}
+
+/* ---------- sessão de administrador (agência) ---------- */
+
+export function senhaAdminConfigurada(): boolean {
+  return !!process.env.ADMIN_SENHA;
+}
+
+export function conferirSenhaAdmin(senha: string): boolean {
+  const esperada = process.env.ADMIN_SENHA;
+  if (!esperada) return false;
+  const a = Buffer.from(String(senha));
+  const b = Buffer.from(esperada);
+  return a.length === b.length && crypto.timingSafeEqual(a, b);
+}
+
+export async function criarSessaoAdmin(): Promise<void> {
+  const jar = await cookies();
+  jar.set(COOKIE_ADMIN, assinar(MARCA_ADMIN), {
+    httpOnly: true,
+    secure: process.env.NODE_ENV === "production",
+    sameSite: "lax",
+    path: "/",
+    maxAge: MAX_IDADE,
+  });
+}
+
+export async function encerrarSessaoAdmin(): Promise<void> {
+  const jar = await cookies();
+  jar.delete(COOKIE_ADMIN);
+}
+
+export async function ehAdmin(): Promise<boolean> {
+  const jar = await cookies();
+  return verificar(jar.get(COOKIE_ADMIN)?.value) === MARCA_ADMIN;
 }
 
 /** Retorna o tenant da sessão se o cookie for válido E bater com o slug pedido. */

@@ -22,22 +22,51 @@ export type ResultadoEnvio = {
 
 /* ---------- Meta ---------- */
 
+/**
+ * Monta o evento conforme a origem do lead. São dois formatos diferentes na
+ * mesma API:
+ *   - Lead Ad (formulário): evento de CRM atribuído pelo `lead_id`.
+ *   - Click-to-WhatsApp: evento de conversa atribuído pelo `ctwa_clid`, que
+ *     exige `action_source: "business_messaging"` + `messaging_channel`.
+ */
+function montarEventoMeta(
+  cfg: MetaConfig,
+  ids: Identificadores,
+  eventName: string,
+  eventTimeSec: number
+): Record<string, unknown> {
+  if (ids.leadId) {
+    return {
+      event_name: eventName,
+      event_time: eventTimeSec,
+      action_source: "system_generated",
+      // exigido pelo Meta para eventos de lead vindos de CRM
+      custom_data: {
+        event_source: "crm",
+        lead_event_source: cfg.leadEventSource || "Painel Leads",
+      },
+      user_data: { lead_id: Number(ids.leadId) },
+    };
+  }
+
+  return {
+    event_name: eventName,
+    event_time: eventTimeSec,
+    action_source: "business_messaging",
+    messaging_channel: "whatsapp",
+    user_data: { ctwa_clid: ids.ctwaClid },
+  };
+}
+
 async function enviarMeta(
   cfg: MetaConfig,
-  leadId: string,
+  ids: Identificadores,
   eventName: string,
   eventTimeSec: number
 ): Promise<ResultadoEnvio> {
   try {
     const body: Record<string, unknown> = {
-      data: [
-        {
-          event_name: eventName,
-          event_time: eventTimeSec,
-          action_source: "system_generated",
-          user_data: { lead_id: Number(leadId) },
-        },
-      ],
+      data: [montarEventoMeta(cfg, ids, eventName, eventTimeSec)],
       access_token: cfg.accessToken,
     };
     if (cfg.testEventCode) body.test_event_code = cfg.testEventCode;
@@ -48,11 +77,12 @@ async function enviarMeta(
       body: JSON.stringify(body),
     });
     const j = (await res.json().catch(() => null)) as
-      | { events_received?: number; error?: { message?: string } }
+      | { events_received?: number; error?: { message?: string; error_user_title?: string } }
       | null;
 
     if (!res.ok) {
-      return { plataforma: "Meta", ok: false, detalhe: j?.error?.message || `HTTP ${res.status}` };
+      const detalhe = j?.error?.error_user_title || j?.error?.message || `HTTP ${res.status}`;
+      return { plataforma: "Meta", ok: false, detalhe };
     }
     return { plataforma: "Meta", ok: true, detalhe: `evento "${eventName}" recebido` };
   } catch (e) {
@@ -166,14 +196,17 @@ export async function enviarConversoes(
   // só envia se o Meta estiver de fato configurado (evita "falhas" antes da hora)
   if (cfg.meta && cfg.meta.datasetId && cfg.meta.accessToken) {
     const evento = cfg.meta.eventos[status];
-    if (!ids.leadId) {
-      tarefas.push(Promise.resolve({ plataforma: "Meta", ok: false, detalhe: "lead sem lead_id" }));
+    // lead_id vem do Lead Ad; ctwa_clid, do anúncio Click-to-WhatsApp
+    if (!ids.leadId && !ids.ctwaClid) {
+      tarefas.push(
+        Promise.resolve({ plataforma: "Meta", ok: false, detalhe: "lead sem lead_id/ctwa_clid" })
+      );
     } else if (!evento) {
       tarefas.push(
         Promise.resolve({ plataforma: "Meta", ok: false, detalhe: `sem evento mapeado para "${status}"` })
       );
     } else {
-      tarefas.push(enviarMeta(cfg.meta, ids.leadId, evento, agoraSec));
+      tarefas.push(enviarMeta(cfg.meta, ids, evento, agoraSec));
     }
   }
 

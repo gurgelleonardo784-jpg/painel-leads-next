@@ -13,20 +13,29 @@ Fluxo mantido do painel original: **Meta / Google Ads → planilha → painel em
 app/
   page.tsx                 landing
   [slug]/page.tsx          painel de um cliente (server) -> <Painel/>
+  admin/page.tsx           tela da agência: cadastro de clientes -> <Admin/>
   api/
     login/route.ts         POST: valida senha do tenant, cria cookie de sessão
     logout/route.ts        POST: encerra sessão
     leads/route.ts         GET: lê os leads do tenant logado
-    leads/[id]/route.ts    PATCH: grava status/anotação
+    leads/[id]/route.ts    PATCH: grava status/anotação (+ devolve a conversão)
     webhook/[slug]/route.ts POST: recebe leads (Google Ads nativo / Meta / JSON livre)
+    meta/route.ts          webhook de leadgen do Meta
+    whatsapp/route.ts      webhook do WhatsApp Cloud API (Click-to-WhatsApp)
+    admin/...              login e CRUD de clientes (protegido por ADMIN_SENHA)
 components/
   Painel.tsx               a interface (client) - filtros, pills, grade, auto-refresh
   LeadCard.tsx             o card de um lead
+  Admin.tsx                a tela de cadastro de clientes
 lib/
   google.ts                cliente Sheets API (service account)
   sheets.ts                leitura/gravação + webhook (porta do Codigo.gs)
-  tenants.ts               quem é cada cliente -> qual planilha
-  auth.ts                  sessão por cookie assinado (HMAC)
+  tenants.ts               quem é cada cliente -> qual planilha (+ CRUD do admin)
+  auth.ts                  sessão por cookie assinado (HMAC), cliente e admin
+  conversoes.ts            devolve a conversão para Meta (CAPI) e Google Ads
+  metaLeadgen.ts           Graph API + validação de assinatura dos webhooks
+  whatsapp.ts              traduz o payload do WhatsApp em colunas de lead
+  rateLimit.ts             freio de tentativas de senha
   format.ts / types.ts     utilitários e tipos de cliente
 ```
 
@@ -41,14 +50,29 @@ lib/
 
 ### 2. Variáveis de ambiente
 
-Copie `.env.example` para `.env.local` e preencha
-`GOOGLE_SERVICE_ACCOUNT_EMAIL`, `GOOGLE_PRIVATE_KEY` e `SESSION_SECRET`.
+Copie `.env.example` para `.env.local` e preencha. Obrigatórias:
+`GOOGLE_SERVICE_ACCOUNT_EMAIL`, `GOOGLE_PRIVATE_KEY`, `SESSION_SECRET` e
+`ADMIN_SENHA`. As da Meta (`META_APP_SECRET`, `META_VERIFY_TOKEN`,
+`META_WHATSAPP_VERIFY_TOKEN`) só fazem falta se você for receber lead direto do
+Meta/WhatsApp.
+
+Rode `npm run verificar` para checar ambiente, planilhas e config de cada
+cliente antes de subir.
 
 ### 3. Tenants (clientes)
 
-Cadastre os clientes em `tenants.json` (dev — copie de `tenants.example.json`) ou
-na variável de ambiente `TENANTS` (produção). Cada item aponta o `slug` e a senha
-para o `spreadsheetId` daquele cliente.
+Cadastre os clientes pela tela **`/admin`** (senha em `ADMIN_SENHA`) ou à mão em
+`tenants.json` (copie de `tenants.example.json`). Cada item aponta o `slug` e a
+senha para o `spreadsheetId` daquele cliente.
+
+**Em produção o cadastro não é gravável.** O `/admin` escreve em `tenants.json`,
+e em hospedagem serverless (Vercel) o disco é efêmero — o que for cadastrado lá
+se perde no próximo deploy. Enquanto não houver um banco, o caminho é: cadastrar
+em desenvolvimento, clicar em **Exportar (TENANTS)** no `/admin` e colar o JSON
+na variável de ambiente `TENANTS` da hospedagem. Com `TENANTS` definida, a tela
+entra em modo somente-leitura e avisa isso. Para tornar gravável de verdade,
+trocar `persistir`/`carregar` em [`lib/tenants.ts`](lib/tenants.ts) por um banco
+— as demais funções não mudam.
 
 ## Rodar
 
@@ -108,6 +132,34 @@ Config (uma vez, no app do Meta em developers.facebook.com):
 O `Lead ID`, `Origem` (Facebook/Instagram) e `Campanha` já vêm preenchidos — e o
 `Lead ID` é o que fecha o loop de conversão de volta (seção abaixo).
 
+## Leads do WhatsApp (anúncios Click-to-WhatsApp)
+
+Quando alguém clica num anúncio "Enviar mensagem" e manda a 1ª mensagem, o
+WhatsApp anexa um bloco `referral` com o anúncio de origem e um `ctwa_clid`
+(id do clique). O painel recebe isso em `/api/whatsapp`, descobre de qual
+cliente é o número e grava o lead na planilha dele.
+
+Cada mensagem **não** vira um lead novo: se o telefone já está na planilha, a
+gravação é ignorada. Isso depende de existir uma coluna de telefone reconhecível
+(`Telefone`, `WhatsApp`, `Celular`, `Phone`...) — o `npm run verificar` avisa.
+
+Configuração:
+
+1. No `.env.local`: `META_APP_SECRET`, `META_WHATSAPP_VERIFY_TOKEN`.
+   **Em produção, sem o app secret o webhook é recusado (503)** — ele é o que
+   impede terceiros de gravar leads falsos na planilha do cliente.
+2. No app do Meta (developers.facebook.com), produto **WhatsApp** → Configuração:
+   - **URL de callback**: `https://SEU-DOMINIO/api/whatsapp`
+   - **Token de verificação**: o mesmo valor de `META_WHATSAPP_VERIFY_TOKEN`
+   - Assine o campo **messages**.
+3. Na tela `/admin`, no cliente, preencha **WhatsApp — Phone Number ID** (o ID
+   do número na Cloud API, não o número em si). É ele que roteia o lead para a
+   planilha certa; dois clientes não podem ter o mesmo.
+
+Colunas gravadas: `Nome`, `Telefone`, `Origem` (`WhatsApp` ou
+`WhatsApp (anúncio)`), `Campanha`, `Primeira mensagem` e `ctwa_clid` — criadas
+sozinhas se não existirem.
+
 ## Conversões de volta para Meta e Google
 
 Quando o cliente muda o status de um lead no painel, a ferramenta envia a
@@ -119,8 +171,12 @@ planilha (auditoria).
 **Pré-requisito — o identificador do lead precisa estar na planilha.** Sem ele,
 a plataforma não sabe qual lead converteu:
 
-- **Meta**: coluna `Lead ID` (o `lead_id` do Lead Ad). Se você usa automação
-  (Make/Zapier) para trazer o lead do Meta, mapeie o `lead_id` para essa coluna.
+- **Meta (formulário)**: coluna `Lead ID` (o `lead_id` do Lead Ad). Se você usa
+  automação (Make/Zapier) para trazer o lead do Meta, mapeie o `lead_id` para
+  essa coluna.
+- **Meta (Click-to-WhatsApp)**: coluna `ctwa_clid`, preenchida sozinha pelo
+  webhook do WhatsApp. O evento vai como `business_messaging` em vez de evento
+  de CRM — a diferença é tratada dentro de `lib/conversoes.ts`.
 - **Google Ads**: coluna `gclid` (ou `gbraid`/`wbraid`). O webhook nativo do
   Google Ads já preenche `Lead ID` e `gclid` automaticamente.
 

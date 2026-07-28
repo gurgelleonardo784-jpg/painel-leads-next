@@ -28,6 +28,7 @@ const TECNICAS = new Set([
   "gcl id",
   "gbraid",
   "wbraid",
+  "ctwa clid", // ctwa_clid: id do clique do anúncio Click-to-WhatsApp
 ]);
 
 export type Identificadores = {
@@ -35,6 +36,7 @@ export type Identificadores = {
   gclid: string;
   gbraid: string;
   wbraid: string;
+  ctwaClid: string;
 };
 
 type Papel = "telefone" | "email" | "campanha" | "origem" | "data" | "nome";
@@ -214,7 +216,9 @@ export async function lerLeads(tenant: Tenant): Promise<Lead[]> {
         if (tec === "gbraid") lead.gbraid = valor;
         else if (tec === "wbraid") lead.wbraid = valor;
         else if (tec === "gclid" || tec === "gcl id") lead.gclid = valor;
-        else lead.leadId = valor; // "lead id" / "leadid" / "leadgen id" / "id" (Meta)
+        else if (tec === "id" || tec === "lead id" || tec === "leadid" || tec === "leadgen id")
+          lead.leadId = valor; // id do lead do Meta (Lead Ads)
+        // demais técnicas (ex.: "ctwa clid") ficam guardadas na planilha, escondidas do card
         continue;
       }
 
@@ -316,6 +320,7 @@ export async function salvarLead(
     gclid: pega("gclid", "gcl_id"),
     gbraid: pega("gbraid"),
     wbraid: pega("wbraid"),
+    ctwaClid: pega("ctwa_clid", "ctwa clid"),
   };
 
   return { ok: true, identificadores };
@@ -423,4 +428,47 @@ export async function gravarLeadWebhook(
     insertDataOption: "INSERT_ROWS",
     requestBody: { values: [linha] },
   });
+}
+
+function soDigitos(s: string): string {
+  return String(s || "").replace(/\D/g, "");
+}
+
+/**
+ * Grava um lead vindo do WhatsApp, mas só se aquele telefone ainda não estiver
+ * na planilha — evita criar um lead novo a cada mensagem da mesma pessoa.
+ * Retorna "duplicado" quando o contato já existe.
+ */
+export async function gravarLeadWhatsappSeNovo(
+  tenant: Tenant,
+  telefone: string,
+  dados: Record<string, string>
+): Promise<"gravado" | "duplicado"> {
+  const sheets = getSheetsClient();
+  const resp = await sheets.spreadsheets.values.get({
+    spreadsheetId: tenant.spreadsheetId,
+    range: tenant.aba,
+  });
+  const valores = (resp.data.values || []) as unknown[][];
+  const cab = (valores[0] || []).map(String);
+
+  // acha a coluna de telefone pelo mapeamento de cabeçalho
+  const mapa = mapearCabecalho(cab);
+  let iTel = -1;
+  for (const k of Object.keys(mapa)) {
+    if (mapa[Number(k)] === "telefone") {
+      iTel = Number(k);
+      break;
+    }
+  }
+
+  const alvo = soDigitos(telefone);
+  if (iTel !== -1 && alvo) {
+    for (let r = 1; r < valores.length; r++) {
+      if (soDigitos(String(valores[r]?.[iTel] ?? "")) === alvo) return "duplicado";
+    }
+  }
+
+  await gravarLeadWebhook(tenant, dados);
+  return "gravado";
 }

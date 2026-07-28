@@ -43,17 +43,26 @@ export default function Painel({ tenant }: { tenant: TenantPublico }) {
     return "ok";
   }, [tenant.slug]);
 
+  /** Retorna vazio em caso de sucesso, ou a mensagem de erro para a tela. */
   const entrar = useCallback(
-    async (valor: string): Promise<boolean> => {
+    async (valor: string): Promise<string> => {
       const res = await fetch("/api/login", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ slug: tenant.slug, senha: valor }),
       });
-      if (!res.ok) return false;
+      if (!res.ok) {
+        // 429 = freio de tentativas; mostra o tempo de espera em vez de "senha incorreta"
+        if (res.status === 429) {
+          const data = await res.json().catch(() => null);
+          return data?.erro || "Muitas tentativas. Tente de novo mais tarde.";
+        }
+        return "Senha incorreta.";
+      }
       const r = await buscarLeads();
-      if (r === "ok") setTela("app");
-      return r === "ok";
+      if (r !== "ok") return "Não consegui carregar os leads. Tente de novo.";
+      setTela("app");
+      return "";
     },
     [tenant.slug, buscarLeads]
   );
@@ -86,8 +95,7 @@ export default function Painel({ tenant }: { tenant: TenantPublico }) {
 
   async function onLogin() {
     setErroLogin("verificando...");
-    const ok = await entrar(senha);
-    if (!ok) setErroLogin("Senha incorreta.");
+    setErroLogin(await entrar(senha));
   }
 
   async function atualizar() {
