@@ -19,6 +19,12 @@
       "phoneNumberId": "1234567890"
     },
 
+    "metaAds": {
+      "adAccountId": "act_1234567890",
+      "accessToken": ""
+    },
+    "mostrarCustoAoCliente": false,
+
     "conversoes": {
       "statusConversao": ["Em contato", "Qualificado", "Ganho", "Perdido"],
 

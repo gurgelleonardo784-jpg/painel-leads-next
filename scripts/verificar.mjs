@@ -67,6 +67,9 @@ async function main() {
   process.env.META_WHATSAPP_VERIFY_TOKEN
     ? ok("META_WHATSAPP_VERIFY_TOKEN definido")
     : aviso("META_WHATSAPP_VERIFY_TOKEN vazio — o Meta não consegue verificar /api/whatsapp");
+  process.env.META_ADS_TOKEN
+    ? ok("META_ADS_TOKEN definido (token de anúncios da agência)")
+    : aviso("META_ADS_TOKEN vazio — sem ele, cada cliente precisa do próprio token de ads_read");
 
   const tenants = carregarTenants();
   titulo(`2. Tenants (${tenants.length} encontrado(s))`);
@@ -133,6 +136,26 @@ async function main() {
       colTel
         ? ok(`Coluna de telefone "${colTel}" — usada para não duplicar o mesmo contato`)
         : falta("Sem coluna de telefone reconhecível: cada mensagem viraria um lead novo. Nomeie a coluna como \"Telefone\".");
+    }
+
+    // dashboard: data e investimento
+    const colData = cab.find((h) => /(^data|carimbo|timestamp|criado|created)/.test(normal(h)));
+    colData
+      ? ok(`Coluna de data "${colData}" — gráfico por dia e filtro de período funcionam`)
+      : aviso('Sem coluna de data: o dashboard soma tudo, mas não separa por período nem monta o gráfico por dia. Acrescente "Data" ou "Carimbo de data/hora".');
+
+    const colValor = cab.find((h) => ["valor", "ticket", "receita", "valor do negocio", "valor fechado"].includes(normal(h)));
+    colValor
+      ? ok(`Coluna de valor "${colValor}" — receita, ticket médio, ROAS e lucro ativos`)
+      : aviso('Sem coluna de valor: o dashboard esconde receita/ROAS/lucro. Crie uma coluna "Valor" e preencha nos negócios ganhos.');
+
+    if (t.metaAds && t.metaAds.adAccountId) {
+      ok(`Conta de anúncios ${t.metaAds.adAccountId} (investimento e CPL no dashboard)`);
+      if (!t.metaAds.accessToken && !(t.conversoes && t.conversoes.meta && t.conversoes.meta.accessToken))
+        falta("metaAds sem token: preencha metaAds.accessToken ou conversoes.meta.accessToken (precisa de ads_read)");
+      if (t.mostrarCustoAoCliente) aviso("o cliente VÊ investimento e CPL no dashboard dele");
+    } else {
+      aviso("Sem metaAds.adAccountId — dashboard mostra volume, mas não investimento nem CPL");
     }
 
     // conversões (Meta)

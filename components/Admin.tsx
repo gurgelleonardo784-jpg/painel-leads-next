@@ -1,6 +1,8 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
+import AdminDashboard from "./AdminDashboard";
+import TemaBotao from "./TemaBotao";
 
 /** Visão de um cliente vinda da API do admin (só o que a tela usa). */
 type AdminTenant = {
@@ -13,7 +15,11 @@ type AdminTenant = {
   ddiPadrao: string;
   conversoes?: { meta?: { datasetId?: string; accessToken?: string } };
   whatsapp?: { phoneNumberId?: string };
+  metaAds?: { adAccountId?: string; accessToken?: string };
+  mostrarCustoAoCliente?: boolean;
 };
+
+type ContaAnuncio = { id: string; nome: string; moeda: string; ativa: boolean };
 
 type FormState = {
   slug: string; // preenchido = editando; vazio = criando
@@ -25,6 +31,9 @@ type FormState = {
   whatsappPhoneNumberId: string;
   metaDatasetId: string;
   metaAccessToken: string;
+  metaAdAccountId: string;
+  metaAdsToken: string;
+  mostrarCustoAoCliente: boolean;
 };
 
 const FORM_VAZIO: FormState = {
@@ -37,13 +46,19 @@ const FORM_VAZIO: FormState = {
   whatsappPhoneNumberId: "",
   metaDatasetId: "",
   metaAccessToken: "",
+  metaAdAccountId: "",
+  metaAdsToken: "",
+  mostrarCustoAoCliente: false,
 };
+
+type Modulo = "clientes" | "dashboard";
 
 export default function Admin() {
   const [tela, setTela] = useState<"carregando" | "login" | "app">("carregando");
   const [senhaLogin, setSenhaLogin] = useState("");
   const [erroLogin, setErroLogin] = useState("");
 
+  const [modulo, setModulo] = useState<Modulo>("clientes");
   const [tenants, setTenants] = useState<AdminTenant[]>([]);
   const [gravavel, setGravavel] = useState(true);
 
@@ -52,6 +67,65 @@ export default function Admin() {
   const [erroForm, setErroForm] = useState("");
   const [salvando, setSalvando] = useState(false);
   const [msg, setMsg] = useState("");
+
+  // conexão da conta de anúncios
+  const [contas, setContas] = useState<ContaAnuncio[] | null>(null);
+  const [conexao, setConexao] = useState<{ tipo: "ok" | "erro"; texto: string } | null>(null);
+  const [ocupado, setOcupado] = useState<"" | "listando" | "testando">("");
+
+  /** Pergunta à Meta quais contas o token enxerga, para escolher numa lista. */
+  async function buscarContas() {
+    if (!form) return;
+    setOcupado("listando");
+    setConexao(null);
+    const res = await fetch("/api/admin/meta", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ acao: "listar", token: form.metaAdsToken }),
+    });
+    const data = await res.json().catch(() => null);
+    setOcupado("");
+    if (!res.ok || !data?.ok) {
+      setContas(null);
+      setConexao({ tipo: "erro", texto: data?.erro || "Não consegui falar com a Meta." });
+      return;
+    }
+    setContas(data.contas);
+    setConexao({
+      tipo: "ok",
+      texto: `${data.contas.length} conta${data.contas.length === 1 ? "" : "s"} encontrada${data.contas.length === 1 ? "" : "s"}. Escolha a deste cliente.`,
+    });
+  }
+
+  /** Confirma que dá mesmo para ler o gasto da conta escolhida. */
+  async function testarConexao() {
+    if (!form) return;
+    setOcupado("testando");
+    setConexao(null);
+    const res = await fetch("/api/admin/meta", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        acao: "testar",
+        token: form.metaAdsToken,
+        adAccountId: form.metaAdAccountId,
+      }),
+    });
+    const data = await res.json().catch(() => null);
+    setOcupado("");
+    if (!res.ok || !data?.ok) {
+      setConexao({ tipo: "erro", texto: data?.erro || "Não consegui ler essa conta." });
+      return;
+    }
+    const v = new Intl.NumberFormat("pt-BR", {
+      style: "currency",
+      currency: data.moeda || "BRL",
+    }).format(data.investimento);
+    setConexao({
+      tipo: "ok",
+      texto: `Conectado. Nos últimos 7 dias: ${v} em ${data.campanhas} campanha${data.campanhas === 1 ? "" : "s"}.`,
+    });
+  }
 
   function aviso(texto: string) {
     setMsg(texto);
@@ -116,7 +190,12 @@ export default function Admin() {
       whatsappPhoneNumberId: t.whatsapp?.phoneNumberId || "",
       metaDatasetId: t.conversoes?.meta?.datasetId || "",
       metaAccessToken: t.conversoes?.meta?.accessToken || "",
+      metaAdAccountId: t.metaAds?.adAccountId || "",
+      metaAdsToken: t.metaAds?.accessToken || "",
+      mostrarCustoAoCliente: !!t.mostrarCustoAoCliente,
     });
+    setContas(null);
+    setConexao(null);
     setEditando(true);
     setErroForm("");
     if (typeof window !== "undefined") window.scrollTo({ top: 0, behavior: "smooth" });
@@ -203,35 +282,80 @@ export default function Admin() {
   }
 
   return (
-    <>
+    <div className="app">
       <header>
         <div className="topo">
-          <div className="marca">
-            Administração
-            <small>
-              {tenants.length} cliente{tenants.length === 1 ? "" : "s"} cadastrado
-              {tenants.length === 1 ? "" : "s"}
-            </small>
+          <div className="topo-linha">
+            <div className="marca-bloco">
+              <div className="logo" aria-hidden="true">
+                AG
+              </div>
+              <div style={{ minWidth: 0 }}>
+                <div className="titulo-linha">
+                  <h1>Administração</h1>
+                  <span className="chip-cliente">Agência</span>
+                </div>
+                <div className="sync">
+                  <span className="ponto" />
+                  <span>
+                    {tenants.length} cliente{tenants.length === 1 ? "" : "s"} cadastrado
+                    {tenants.length === 1 ? "" : "s"}
+                  </span>
+                </div>
+              </div>
+            </div>
+
+            <div className="topo-acoes">
+              {modulo === "clientes" && (
+                <button className="btn btn-primario" onClick={novo}>
+                  <span aria-hidden="true">+</span>
+                  <span className="rotulo-btn">Novo cliente</span>
+                </button>
+              )}
+              {modulo === "clientes" && tenants.length > 0 && (
+                <button
+                  className="btn"
+                  title="Copia o cadastro inteiro no formato da variável de ambiente TENANTS"
+                  onClick={copiarTenants}
+                >
+                  <span className="rotulo-btn">Exportar (TENANTS)</span>
+                </button>
+              )}
+              <button className="btn" onClick={() => void sair()}>
+                Sair
+              </button>
+              <span className="divisor" />
+              <TemaBotao />
+            </div>
           </div>
-          <button className="btn btn-primario" onClick={novo}>
-            + Novo cliente
-          </button>
-          {tenants.length > 0 && (
+
+          <div className="abas" role="tablist" aria-label="Módulos">
             <button
-              className="btn"
-              title="Copia o cadastro inteiro no formato da variável de ambiente TENANTS"
-              onClick={copiarTenants}
+              className="aba"
+              role="tab"
+              aria-selected={modulo === "clientes"}
+              onClick={() => setModulo("clientes")}
             >
-              Exportar (TENANTS)
+              Clientes
             </button>
-          )}
-          <button className="btn" onClick={() => void sair()}>
-            Sair
-          </button>
+            <button
+              className="aba"
+              role="tab"
+              aria-selected={modulo === "dashboard"}
+              onClick={() => setModulo("dashboard")}
+            >
+              Dashboard
+            </button>
+          </div>
         </div>
       </header>
 
-      <main>
+      {modulo === "dashboard" ? (
+        <div className="conteudo">
+          <AdminDashboard />
+        </div>
+      ) : (
+      <div className="conteudo">
         {!gravavel && (
           <div className="aviso-ro">
             Cadastro em modo <b>somente-leitura</b> (produção sem banco). As alterações não serão
@@ -240,7 +364,7 @@ export default function Admin() {
         )}
 
         {form && (
-          <div className="card admin-form">
+          <div className="admin-form">
             <h3>{editando ? `Editar "${form.nome || form.slug}"` : "Novo cliente"}</h3>
             <div className="form-grid">
               <label className="campo">
@@ -317,6 +441,92 @@ export default function Admin() {
                   placeholder="EAA..."
                 />
               </label>
+              <div className="campo-full conexao-meta">
+                <div className="conexao-titulo">
+                  Conta de anúncios da Meta
+                  <small>
+                    Traz investimento, CPL e ROAS para o dashboard deste cliente. Precisa de um
+                    token com <b>ads_read</b> — o token de conversões acima <b>não</b> serve.
+                  </small>
+                </div>
+
+                <label className="campo">
+                  <span>Token de anúncios (vazio = usa o token da agência)</span>
+                  <input
+                    value={form.metaAdsToken}
+                    onChange={(e) => {
+                      setForm({ ...form, metaAdsToken: e.target.value });
+                      setContas(null);
+                      setConexao(null);
+                    }}
+                    placeholder="EAA… (usuário de sistema com ads_read)"
+                  />
+                </label>
+
+                <div className="conexao-acoes">
+                  <button
+                    className="btn"
+                    disabled={ocupado !== ""}
+                    onClick={() => void buscarContas()}
+                  >
+                    {ocupado === "listando" ? "Buscando…" : "Buscar contas"}
+                  </button>
+
+                  {contas ? (
+                    <select
+                      value={form.metaAdAccountId}
+                      aria-label="Conta de anúncios"
+                      onChange={(e) => {
+                        setForm({ ...form, metaAdAccountId: e.target.value });
+                        setConexao(null);
+                      }}
+                    >
+                      <option value="">Escolha a conta…</option>
+                      {contas.map((c) => (
+                        <option key={c.id} value={c.id}>
+                          {c.nome} · {c.id}
+                          {c.ativa ? "" : " (inativa)"}
+                        </option>
+                      ))}
+                    </select>
+                  ) : (
+                    <input
+                      value={form.metaAdAccountId}
+                      onChange={(e) => setForm({ ...form, metaAdAccountId: e.target.value })}
+                      placeholder="ou cole o ID: act_1234567890"
+                      style={{ flex: 1, minWidth: 200 }}
+                    />
+                  )}
+
+                  <button
+                    className="btn"
+                    disabled={ocupado !== "" || !form.metaAdAccountId}
+                    onClick={() => void testarConexao()}
+                  >
+                    {ocupado === "testando" ? "Testando…" : "Testar"}
+                  </button>
+                </div>
+
+                {conexao && (
+                  <p className={`conexao-status ${conexao.tipo}`}>{conexao.texto}</p>
+                )}
+              </div>
+              <label className="campo-check">
+                <input
+                  type="checkbox"
+                  checked={form.mostrarCustoAoCliente}
+                  onChange={(e) =>
+                    setForm({ ...form, mostrarCustoAoCliente: e.target.checked })
+                  }
+                />
+                <span>
+                  Mostrar investimento e custo por lead no dashboard do cliente
+                  <br />
+                  <small style={{ color: "var(--txt3)" }}>
+                    Desmarcado, o custo de mídia aparece só aqui na área da agência.
+                  </small>
+                </span>
+              </label>
             </div>
             <div className="erro">{erroForm}</div>
             <div className="form-acoes">
@@ -348,7 +558,7 @@ export default function Admin() {
               const temMeta = !!t.conversoes?.meta?.datasetId;
               const temWhats = !!t.whatsapp?.phoneNumberId;
               return (
-                <div className="card cliente" key={t.slug}>
+                <div className="cliente" key={t.slug}>
                   <div className="cliente-info">
                     <h3>{t.titulo}</h3>
                     <div className="cliente-meta">
@@ -381,9 +591,10 @@ export default function Admin() {
             })
           )}
         </div>
-      </main>
+      </div>
+      )}
 
       <div className={`toast ${msg ? "on" : ""}`}>{msg}</div>
-    </>
+    </div>
   );
 }

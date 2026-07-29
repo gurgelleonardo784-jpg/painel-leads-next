@@ -61,6 +61,12 @@ export type WhatsappConfig = {
   phoneNumberId: string; // ID do número na Cloud API; roteia o webhook para este tenant
 };
 
+/** Leitura do investimento na conta de anúncios (Marketing API). */
+export type MetaAdsConfig = {
+  adAccountId: string; // com ou sem o prefixo "act_"
+  accessToken?: string; // se vazio, usa o token de conversoes.meta (precisa de ads_read)
+};
+
 export type Tenant = {
   slug: string;
   nome: string;
@@ -75,6 +81,9 @@ export type Tenant = {
   conversoes?: ConversoesConfig;
   metaLeadgen?: MetaLeadgenConfig;
   whatsapp?: WhatsappConfig;
+  metaAds?: MetaAdsConfig;
+  /** custo de mídia é informação da agência; só aparece pro cliente se ligado aqui */
+  mostrarCustoAoCliente?: boolean;
 };
 
 const STATUS_PADRAO = ["Novo", "Em contato", "Qualificado", "Ganho", "Perdido"];
@@ -94,6 +103,8 @@ function normalizarTenant(raw: Record<string, unknown>): Tenant {
     conversoes: raw.conversoes ? (raw.conversoes as ConversoesConfig) : undefined,
     metaLeadgen: raw.metaLeadgen ? (raw.metaLeadgen as MetaLeadgenConfig) : undefined,
     whatsapp: raw.whatsapp ? (raw.whatsapp as WhatsappConfig) : undefined,
+    metaAds: raw.metaAds ? (raw.metaAds as MetaAdsConfig) : undefined,
+    mostrarCustoAoCliente: !!raw.mostrarCustoAoCliente,
   };
 }
 
@@ -151,6 +162,7 @@ export function toPublico(t: Tenant): TenantPublico {
     titulo: t.titulo,
     status: t.status,
     exigeSenha: !!t.senha,
+    mostrarCusto: !!(t.metaAds?.adAccountId && t.mostrarCustoAoCliente),
   };
 }
 
@@ -254,6 +266,15 @@ export function montarDadosTenant(entrada: Record<string, unknown>): Record<stri
 
   const phoneNumberId = txt(entrada.whatsappPhoneNumberId);
   if (phoneNumberId) dados.whatsapp = { phoneNumberId };
+
+  // conta de anúncios: o token é opcional — sem ele vale o da agência
+  // (META_ADS_TOKEN) e, por último, o token de conversões
+  const adAccountId = txt(entrada.metaAdAccountId);
+  if (adAccountId) {
+    const tokenAds = txt(entrada.metaAdsToken);
+    dados.metaAds = tokenAds ? { adAccountId, accessToken: tokenAds } : { adAccountId };
+  }
+  dados.mostrarCustoAoCliente = !!entrada.mostrarCustoAoCliente;
 
   const datasetId = txt(entrada.metaDatasetId);
   const accessToken = txt(entrada.metaAccessToken);

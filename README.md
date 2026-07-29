@@ -24,9 +24,18 @@ app/
     whatsapp/route.ts      webhook do WhatsApp Cloud API (Click-to-WhatsApp)
     admin/...              login e CRUD de clientes (protegido por ADMIN_SENHA)
 components/
-  Painel.tsx               a interface (client) - filtros, pills, grade, auto-refresh
-  LeadCard.tsx             o card de um lead
+  Painel.tsx               shell do cliente: KPIs, filtros, módulos
+  Dashboard.tsx            módulo Dashboard do cliente
   Admin.tsx                a tela de cadastro de clientes
+  AdminDashboard.tsx       visão consolidada da agência
+  TemaBotao.tsx            alternador claro/escuro
+  Icones.tsx               SVGs inline (sem biblioteca de ícones)
+  leads/
+    Kanban.tsx             pipeline por etapa
+    Lista.tsx              visão em lista
+    CardLead.tsx           o card de um lead
+    Drawer.tsx             detalhe do lead em painel lateral
+    NovoLead.tsx           cadastro manual
 lib/
   google.ts                cliente Sheets API (service account)
   sheets.ts                leitura/gravação + webhook (porta do Codigo.gs)
@@ -34,6 +43,9 @@ lib/
   auth.ts                  sessão por cookie assinado (HMAC), cliente e admin
   conversoes.ts            devolve a conversão para Meta (CAPI) e Google Ads
   metaLeadgen.ts           Graph API + validação de assinatura dos webhooks
+  metaAds.ts               investimento por campanha (Marketing API) + cache
+  metricas.ts              motor de métricas, puro e sem I/O
+  apresentacao.ts          como o lead aparece: nome, telefone, cor, tempo
   whatsapp.ts              traduz o payload do WhatsApp em colunas de lead
   rateLimit.ts             freio de tentativas de senha
   format.ts / types.ts     utilitários e tipos de cliente
@@ -159,6 +171,131 @@ Configuração:
 Colunas gravadas: `Nome`, `Telefone`, `Origem` (`WhatsApp` ou
 `WhatsApp (anúncio)`), `Campanha`, `Primeira mensagem` e `ctwa_clid` — criadas
 sozinhas se não existirem.
+
+## Colunas opcionais da planilha
+
+Além das colunas de sempre (nome, telefone, e-mail, data, origem, campanha), o
+painel reconhece estas — todas opcionais, todas destravando algo na tela:
+
+| Coluna | O que destrava |
+|---|---|
+| `Valor` (ou `Ticket`, `Receita`) | receita, ticket médio, ROAS e lucro no dashboard; soma por coluna do pipeline |
+| `Temperatura` | selo Quente/Morno/Frio no card (aceita esses três valores) |
+| `Primeira mensagem` | prévia do card e bloco no detalhe — preenchida sozinha pelo webhook do WhatsApp |
+| `UTM` | rastreio de origem no detalhe do lead |
+| `ctwa_clid` | atribuição de conversão do Click-to-WhatsApp (preenchida sozinha) |
+
+Sem elas nada quebra: o número correspondente some da tela, com o motivo
+escrito, em vez de aparecer zerado. O `npm run verificar` lista o que falta.
+
+**Tipo do lead** — é derivado, não é coluna: quem tem respostas é `Formulário`;
+quem veio de conversa é `Perfil WhatsApp`; o resto é `Só contato` (dá para
+falar com ele, mas não há nada que o qualifique).
+
+## Aparência (marca)
+
+O produto nasce **escuro** — é o design entregue. O tema claro existe como
+alternativa, no botão ☾/☀ do topo, e a escolha fica salva no navegador.
+
+Fontes: **Instrument Sans** na interface e **IBM Plex Mono** em número, telefone,
+UTM e valor — carregadas por `next/font`, sem chamada externa em tempo de
+execução.
+
+Todo o visual sai de tokens no topo de [`app/globals.css`](app/globals.css). Para
+aplicar a marca da agência, mexa **só no bloco `MARCA`**:
+
+```css
+--marca: #2b6cf6;        /* cor principal */
+--marca-hover: #3d7bff;  /* hover do botão primário */
+--marca-ink: #ffffff;    /* texto por cima da cor principal */
+--fonte: ...;            /* a fonte da agência */
+```
+
+O resto (botões, campos, abas, cards, tabelas, drawer) herda dali. O tema claro
+tem passos próprios logo abaixo, no bloco `[data-theme="light"]`.
+
+As cores de **etapa** (`--etapa-*`) e de **canal** (`--canal-*`) foram validadas
+para contraste e daltonismo sobre a superfície escura. Uma correção foi feita no
+design original: **Site/SEO era `#14B8A6` e ficava indistinguível do verde de
+Indicação** (ΔE 11,3 em visão normal, contra um piso de 15 — ou seja, nem quem
+enxerga todas as cores separava as duas). Foi aprofundado para `#0D9488`, que
+mantém a identidade teal e passa. Se trocar essas cores pelas da marca, revalide
+antes de subir — cor de gráfico que não separa é gráfico errado, e isso não se
+julga a olho.
+
+## Dashboard e métricas
+
+O painel tem dois módulos, nas abas do topo: **Leads** e **Dashboard**.
+
+O módulo Leads tem duas visões, no controle à direita dos filtros:
+**Pipeline** (kanban, uma coluna por etapa, com o valor somado de cada coluna) e
+**Lista** (mais densa, para varrer muitos leads). Clicar em qualquer lead abre o
+painel lateral com contato, campanha de origem, troca de etapa, respostas do
+formulário — ou, se não houver formulário, o que falta e a primeira mensagem do
+WhatsApp — anotações e histórico. `Esc` fecha. O botão **Novo lead** grava um
+lead manual direto na planilha.
+
+O dashboard existe em dois recortes:
+
+- **Cliente** (`/<slug>`): 6 indicadores (investimento, leads, CPL,
+  qualificados, receita, ROAS), leads por dia, desempenho por canal,
+  rastreamento por campanha, funil, origens e três resumos. Investimento e CPL
+  só aparecem se o cliente estiver marcado como "mostrar custo" no cadastro.
+- **Agência** (`/admin`): os mesmos números somados, leads por cliente e uma
+  tabela comparando todos — leads, variação, qualificados, ganhos, investimento,
+  CPL e receita.
+
+As métricas de volume saem dos leads que já estão em memória (a planilha é lida
+uma vez). Só o investimento vai à rede.
+
+### Conectar a conta de anúncios (Meta Marketing API)
+
+**O token de conversões não serve para isto.** Ele é escopado ao Events Manager
+e responde `(#200) Missing Permissions` na API de anúncios. É preciso um token
+com **`ads_read`**.
+
+Passo a passo, uma vez só para a agência:
+
+1. Em [business.facebook.com](https://business.facebook.com) → **Configurações
+   do negócio** → **Usuários** → **Usuários do sistema**: crie um usuário de
+   sistema (ou use o que já existe).
+2. Em **Ativos atribuídos**, dê a ele acesso às **contas de anúncio** de todos
+   os clientes (permissão de visualização basta).
+3. **Gerar novo token** → escolha o app → marque **`ads_read`** → copie.
+4. Cole em `META_ADS_TOKEN` no `.env.local` (ou nas variáveis da hospedagem).
+
+Depois disso, no cadastro de cada cliente (`/admin` → Editar), o bloco
+**Conta de anúncios da Meta**:
+
+- **Buscar contas** lista todas as contas que o token enxerga — escolha a do
+  cliente numa lista, sem colar ID a esmo.
+- **Testar** faz uma leitura real dos últimos 7 dias e responde com o valor
+  investido e o número de campanhas. É isso que confirma a conexão antes de o
+  cliente abrir o painel.
+- O campo de token dentro do bloco é opcional: serve para o cliente que tem
+  token próprio. Vazio, vale o `META_ADS_TOKEN` da agência.
+
+O painel casa as campanhas da conta com as campanhas da planilha pelo nome,
+produzindo CPL, ROAS e lucro por campanha. Erro de credencial não derruba o
+dashboard: os números de volume continuam e um aviso ocupa o lugar do custo. As
+respostas ficam 10 minutos em cache, para não queimar a cota da API.
+
+> Campanha que gastou mas não gerou lead na planilha também aparece na tabela —
+> é justamente onde o dinheiro está indo embora.
+
+### Coluna de data
+
+Sem uma coluna de data (`Data`, `Carimbo de data/hora`, `Created`...) o painel
+não consegue situar o lead no tempo: os totais e o funil ficam certos, mas o
+filtro de período e o gráfico por dia não funcionam. Nesse caso o dashboard
+**avisa na tela** quantos leads estão sem data em vez de mostrar zero calado.
+O `npm run verificar` também aponta isso.
+
+### Limite conhecido
+
+A planilha guarda o *estado atual* de cada lead, não o histórico. Por isso o
+dashboard responde "quantos estão qualificados", mas não "quanto tempo levou
+para qualificar" — isso exigiria registrar cada mudança de status.
 
 ## Conversões de volta para Meta e Google
 

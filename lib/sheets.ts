@@ -41,6 +41,21 @@ export type Identificadores = {
 
 type Papel = "telefone" | "email" | "campanha" | "origem" | "data" | "nome";
 
+/** Nomes aceitos para a coluna de valor do negócio (alimenta receita e ROAS). */
+const COL_VALOR = new Set(["valor", "ticket", "valor do negocio", "receita", "valor fechado"]);
+
+/** "R$ 1.234,56" ou "1234.56" -> 1234.56. Vazio ou lixo -> 0. */
+function parseValor(txt: string): number {
+  const limpo = String(txt || "")
+    .replace(/[^\d,.-]/g, "")
+    .trim();
+  if (!limpo) return 0;
+  // formato brasileiro: ponto é milhar, vírgula é decimal
+  const normalizado = limpo.includes(",") ? limpo.replace(/\./g, "").replace(",", ".") : limpo;
+  const n = Number(normalizado);
+  return Number.isFinite(n) && n > 0 ? n : 0;
+}
+
 /* ---------- utilitários (portados) ---------- */
 
 function normalizar(s: unknown): string {
@@ -195,6 +210,10 @@ export async function lerLeads(tenant: Tenant): Promise<Lead[]> {
       whatsapp: "",
       ordem: r,
       respostas: [],
+      valor: 0,
+      temperatura: "",
+      primeiraMensagem: "",
+      utm: "",
       leadId: "",
       gclid: "",
       gbraid: "",
@@ -219,6 +238,26 @@ export async function lerLeads(tenant: Tenant): Promise<Lead[]> {
         else if (tec === "id" || tec === "lead id" || tec === "leadid" || tec === "leadgen id")
           lead.leadId = valor; // id do lead do Meta (Lead Ads)
         // demais técnicas (ex.: "ctwa clid") ficam guardadas na planilha, escondidas do card
+        continue;
+      }
+
+      // colunas opcionais que alimentam o dashboard e o card, mas não são
+      // "perguntas do formulário" — por isso saem da lista de respostas
+      const extra = normalizar(titulo);
+      if (COL_VALOR.has(extra)) {
+        lead.valor = parseValor(valor);
+        continue;
+      }
+      if (extra === "temperatura") {
+        lead.temperatura = valor;
+        continue;
+      }
+      if (extra === "primeira mensagem") {
+        lead.primeiraMensagem = valor;
+        continue;
+      }
+      if (extra === "utm" || extra === "utms") {
+        lead.utm = valor;
         continue;
       }
 
