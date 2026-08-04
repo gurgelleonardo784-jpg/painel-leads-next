@@ -191,6 +191,41 @@ export type CampanhaMetrica = {
   lucro: number | null;
   impressoes: number | null;
   cliques: number | null;
+  /**
+   * Conversas iniciadas pelo anúncio (Click-to-WhatsApp / Direct), segundo a
+   * Meta. O contato em si não vem — só com a Cloud API — mas sem isto uma
+   * campanha de mensagem apareceria com zero resultado.
+   */
+  conversas: number;
+  respostas: number;
+  custoPorConversa: number | null;
+  /** quantos leads a Meta diz ter gerado (atribuição dela) */
+  leadsMeta: number;
+  /** (planilha − Meta) / Meta, em %. null quando a Meta não reportou lead */
+  divergencia: number | null;
+  /** CPL pela contagem da Meta — o número que ela mostra no Gerenciador */
+  cplMeta: number | null;
+};
+
+/**
+ * O mesmo recorte, no nível do anúncio. É aqui que o rastreamento fica útil:
+ * campanha diz onde o dinheiro entrou, anúncio diz qual criativo trouxe gente.
+ */
+export type AnuncioMetrica = {
+  anuncio: string;
+  conjunto: string;
+  campanha: string;
+  canal: string;
+  investimento: number;
+  leadsMeta: number;
+  leadsPlanilha: number;
+  divergencia: number | null;
+  conversas: number;
+  qualificados: number;
+  ganhos: number;
+  receita: number;
+  cpl: number | null;
+  cplMeta: number | null;
 };
 
 export type CanalMetrica = {
@@ -237,7 +272,10 @@ export type Metricas = {
   funil: EtapaFunil[];
   origens: Fatia[];
   campanhas: CampanhaMetrica[];
+  anuncios: AnuncioMetrica[];
   canais: CanalMetrica[];
+  /** quantos leads do período têm o anúncio de origem preenchido na planilha */
+  comAnuncio: number;
   custo: Custo | null;
   /** soma do valor dos leads ganhos no período */
   receita: number;
@@ -250,6 +288,9 @@ export type Metricas = {
   comValor: number;
   /** leads parados no primeiro status — a fila de trabalho */
   aguardandoContato: number;
+  /** conversas iniciadas por anúncios de mensagem, somadas (fonte: Meta) */
+  conversas: number;
+  custoPorConversa: number | null;
 };
 
 function taxa(parte: number, todo: number): number {
@@ -318,6 +359,12 @@ function casarCampanhas(leads: Lead[], insights: InsightCampanha[]): CampanhaMet
       lucro: investimento === null ? null : receita - investimento,
       impressoes: ins ? ins.impressoes : null,
       cliques: ins ? ins.cliques : null,
+      conversas: ins ? ins.conversas : 0,
+      respostas: ins ? ins.respostas : 0,
+      custoPorConversa: ins && ins.conversas > 0 ? ins.investimento / ins.conversas : null,
+      leadsMeta: ins ? ins.leadsMeta : 0,
+      divergencia: ins && ins.leadsMeta > 0 ? ((leads - ins.leadsMeta) / ins.leadsMeta) * 100 : null,
+      cplMeta: ins && ins.leadsMeta > 0 ? ins.investimento / ins.leadsMeta : null,
     };
   };
 
@@ -341,6 +388,91 @@ function casarCampanhas(leads: Lead[], insights: InsightCampanha[]): CampanhaMet
     const lb = b.lucro ?? b.receita;
     return lb - la || b.leads - a.leads;
   });
+}
+
+/**
+ * Rastreamento por anúncio: cruza o que a Meta reporta com o que realmente
+ * chegou na planilha.
+ *
+ * As duas contagens divergem por motivos legítimos — a Meta atribui pela
+ * janela dela, o formulário pode ser abandonado, a automação pode falhar —
+ * e por motivos que interessam: lead duplicado, lead que nunca chegou. Por
+ * isso o painel mostra as duas lado a lado em vez de escolher uma.
+ *
+ * O casamento é pelo nome do anúncio. Lead sem coluna de anúncio na planilha
+ * conta só do lado da Meta, e a tela avisa.
+ */
+function reconciliarAnuncios(leads: Lead[], insights: InsightCampanha[]): AnuncioMetrica[] {
+  // leads da planilha, agrupados pelo nome do anúncio
+  type Grupo = { leads: number; qual: number; ganhos: number; receita: number };
+  const daPlanilha = new Map<string, Grupo>();
+  for (const l of leads) {
+    const chave = normal(l.anuncio).trim();
+    if (!chave) continue;
+    const g = daPlanilha.get(chave) || { leads: 0, qual: 0, ganhos: 0, receita: 0 };
+    g.leads += 1;
+    if (ehQualificado(l.status) || ehGanho(l.status)) g.qual += 1;
+    if (ehGanho(l.status)) {
+      g.ganhos += 1;
+      g.receita += l.valor;
+    }
+    daPlanilha.set(chave, g);
+  }
+
+  const linhas: AnuncioMetrica[] = [];
+  const usados = new Set<string>();
+
+  for (const ins of insights) {
+    const nome = ins.anuncio || "(sem anúncio)";
+    const chave = normal(nome).trim();
+    const g = daPlanilha.get(chave);
+    if (g) usados.add(chave);
+
+    const naPlanilha = g?.leads || 0;
+    linhas.push({
+      anuncio: nome,
+      conjunto: ins.conjunto || "",
+      campanha: ins.campanha,
+      canal: "Meta Ads",
+      investimento: ins.investimento,
+      leadsMeta: ins.leadsMeta,
+      leadsPlanilha: naPlanilha,
+      divergencia: ins.leadsMeta > 0 ? ((naPlanilha - ins.leadsMeta) / ins.leadsMeta) * 100 : null,
+      conversas: ins.conversas,
+      qualificados: g?.qual || 0,
+      ganhos: g?.ganhos || 0,
+      receita: g?.receita || 0,
+      cpl: naPlanilha > 0 ? ins.investimento / naPlanilha : null,
+      cplMeta: ins.leadsMeta > 0 ? ins.investimento / ins.leadsMeta : null,
+    });
+  }
+
+  // anúncio que trouxe lead na planilha mas não aparece no relatório da Meta:
+  // é sinal de nome divergente ou de lead atribuído errado — precisa aparecer
+  for (const [chave, g] of daPlanilha) {
+    if (usados.has(chave)) continue;
+    const original = leads.find((l) => normal(l.anuncio).trim() === chave);
+    linhas.push({
+      anuncio: original?.anuncio || chave,
+      conjunto: original?.conjunto || "",
+      campanha: original?.campanha || "",
+      canal: original ? canalDoLead(original) : "Meta Ads",
+      investimento: 0,
+      leadsMeta: 0,
+      leadsPlanilha: g.leads,
+      divergencia: null,
+      conversas: 0,
+      qualificados: g.qual,
+      ganhos: g.ganhos,
+      receita: g.receita,
+      cpl: null,
+      cplMeta: null,
+    });
+  }
+
+  return linhas.sort(
+    (a, b) => b.leadsPlanilha - a.leadsPlanilha || b.investimento - a.investimento
+  );
 }
 
 /** Agrupa os leads por canal, somando o investimento das campanhas de cada um. */
@@ -381,6 +513,8 @@ function agruparCanais(leads: Lead[], campanhas: CampanhaMetrica[]): CanalMetric
 
 export type EntradaCusto = {
   campanhas: InsightCampanha[];
+  /** o mesmo período no nível de anúncio, quando disponível */
+  anuncios?: InsightCampanha[];
   moeda: string;
   erro?: string;
 };
@@ -415,6 +549,14 @@ export function calcular(
   const comValor = leads.filter((l) => l.valor > 0).length;
   const primeiroStatus = statusList[0] || "Novo";
 
+  // conversas iniciadas por anúncio de mensagem. O custo por conversa só
+  // considera o que foi gasto nas campanhas que geraram conversa — misturar
+  // com o gasto de campanhas de formulário daria um número sem sentido.
+  const totalConversas = campanhas.reduce((s, c) => s + c.conversas, 0);
+  const investimentoConversas = campanhas
+    .filter((c) => c.conversas > 0)
+    .reduce((s, c) => s + (c.investimento || 0), 0);
+
   return {
     periodo,
     total,
@@ -431,6 +573,8 @@ export function calcular(
     funil: funil(leads, statusList),
     origens: porOrigem(leads),
     campanhas,
+    anuncios: reconciliarAnuncios(leads, custo?.anuncios || []),
+    comAnuncio: leads.filter((l) => l.anuncio.trim()).length,
     canais: agruparCanais(leads, campanhas),
     receita,
     ticketMedio: dividir(receita, ganhos),
@@ -438,6 +582,8 @@ export function calcular(
     lucro: investimento > 0 || receita > 0 ? receita - investimento : null,
     comValor,
     aguardandoContato: leads.filter((l) => (l.status || primeiroStatus) === primeiroStatus).length,
+    conversas: totalConversas,
+    custoPorConversa: totalConversas > 0 ? dividir(investimentoConversas, totalConversas) : null,
     custo: custo
       ? {
           investimento,

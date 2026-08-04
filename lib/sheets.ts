@@ -39,7 +39,7 @@ export type Identificadores = {
   ctwaClid: string;
 };
 
-type Papel = "telefone" | "email" | "campanha" | "origem" | "data" | "nome";
+type Papel = "telefone" | "email" | "campanha" | "conjunto" | "anuncio" | "origem" | "data" | "nome";
 
 /** Nomes aceitos para a coluna de valor do negócio (alimenta receita e ROAS). */
 const COL_VALOR = new Set(["valor", "ticket", "valor do negocio", "receita", "valor fechado"]);
@@ -80,7 +80,12 @@ function mapearCabecalho(cab: string[]): Record<number, Papel> {
     const n = normalizar(cab[i]);
     if (/(telefone|whats|celular|phone|fone|^numero|^telefone)/.test(n)) mapa[i] = "telefone";
     else if (/(e-?mail)/.test(n)) mapa[i] = "email";
-    else if (/(campanha|campaign|anuncio|ad name|ad set|conjunto|formulario|form name)/.test(n)) mapa[i] = "campanha";
+    // campanha, conjunto e anúncio são três níveis diferentes: sem separar, o
+    // primeiro que aparecesse virava "campanha" e os outros dois iam parar na
+    // lista de respostas do formulário. Do mais específico para o mais geral.
+    else if (/(conjunto|ad ?set)/.test(n)) mapa[i] = "conjunto";
+    else if (/(anuncio|ad name|^ad$|creative)/.test(n)) mapa[i] = "anuncio";
+    else if (/(campanha|campaign|formulario|form name)/.test(n)) mapa[i] = "campanha";
     else if (/(origem|plataforma|fonte|source|platform|canal)/.test(n)) mapa[i] = "origem";
     else if (/(^data|carimbo|timestamp|criado|created)/.test(n)) mapa[i] = "data";
     else if (/^(nome|nome completo|primeiro nome|seu nome|name|full name|first name)$/.test(n)) mapa[i] = "nome";
@@ -205,6 +210,8 @@ export async function lerLeads(tenant: Tenant): Promise<Lead[]> {
       data: "",
       origem: "",
       campanha: "",
+      conjunto: "",
+      anuncio: "",
       status: "",
       nota: "",
       whatsapp: "",

@@ -54,7 +54,12 @@ export async function buscarLeadMeta(
   dados["Lead ID"] = String(lead.id || leadgenId);
   dados["Origem"] =
     lead.platform === "ig" ? "Instagram" : lead.platform === "fb" ? "Facebook" : "Meta";
+
+  // os três níveis, separados: é o que permite conferir depois quantos leads
+  // cada anúncio realmente trouxe, contra o que a Meta reporta
   if (lead.campaign_name) dados["Campanha"] = lead.campaign_name;
+  if (lead.adset_name) dados["Conjunto"] = lead.adset_name;
+  if (lead.ad_name) dados["Anúncio"] = lead.ad_name;
 
   return dados;
 }

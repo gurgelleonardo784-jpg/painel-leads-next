@@ -37,23 +37,27 @@ export async function GET(req: Request) {
       if (!t.spreadsheetId) return { slug: t.slug, nome: t.nome, erro: "sem planilha" };
 
       try {
-        // planilha e conta de anúncios são independentes: buscamos juntas
-        const [leads, insights] = await Promise.all([
+        // planilha, campanhas e anúncios são independentes: buscamos juntos
+        const token = tokenDeAnuncios(t.metaAds, t.conversoes?.meta?.accessToken);
+        const temConta = !!t.metaAds?.adAccountId;
+        const [leads, insights, insightsAnuncio] = await Promise.all([
           lerLeads(t),
-          t.metaAds?.adAccountId
-            ? buscarInvestimento(
-                t.metaAds,
-                tokenDeAnuncios(t.metaAds, t.conversoes?.meta?.accessToken),
-                periodo.desde,
-                periodo.ate
-              )
+          temConta
+            ? buscarInvestimento(t.metaAds!, token, periodo.desde, periodo.ate, "campaign")
+            : Promise.resolve(null),
+          temConta
+            ? buscarInvestimento(t.metaAds!, token, periodo.desde, periodo.ate, "ad")
             : Promise.resolve(null),
         ]);
 
         const custo = !insights
           ? null
           : insights.ok
-            ? { campanhas: insights.campanhas, moeda: insights.moeda }
+            ? {
+                campanhas: insights.campanhas,
+                anuncios: insightsAnuncio?.ok ? insightsAnuncio.campanhas : [],
+                moeda: insights.moeda,
+              }
             : { campanhas: [], moeda: "BRL", erro: insights.erro };
 
         return {

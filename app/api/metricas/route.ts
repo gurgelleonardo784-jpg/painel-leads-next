@@ -29,20 +29,28 @@ export async function GET(req: Request) {
   }
 
   const periodo = ultimosDias(dias);
-  const res = await buscarInvestimento(
-    tenant.metaAds,
-    tokenDeAnuncios(tenant.metaAds, tenant.conversoes?.meta?.accessToken),
-    periodo.desde,
-    periodo.ate
-  );
+  const token = tokenDeAnuncios(tenant.metaAds, tenant.conversoes?.meta?.accessToken);
 
-  if (!res.ok) {
+  // campanha e anúncio são duas chamadas independentes; vão juntas
+  const [porCampanha, porAnuncio] = await Promise.all([
+    buscarInvestimento(tenant.metaAds, token, periodo.desde, periodo.ate, "campaign"),
+    buscarInvestimento(tenant.metaAds, token, periodo.desde, periodo.ate, "ad"),
+  ]);
+
+  if (!porCampanha.ok) {
     // o dashboard continua útil sem o custo; o erro aparece discreto na tela
-    return NextResponse.json({ ok: true, custo: { campanhas: [], moeda: "BRL", erro: res.erro } });
+    return NextResponse.json({
+      ok: true,
+      custo: { campanhas: [], moeda: "BRL", erro: porCampanha.erro },
+    });
   }
 
   return NextResponse.json({
     ok: true,
-    custo: { campanhas: res.campanhas, moeda: res.moeda },
+    custo: {
+      campanhas: porCampanha.campanhas,
+      anuncios: porAnuncio.ok ? porAnuncio.campanhas : [],
+      moeda: porCampanha.moeda,
+    },
   });
 }

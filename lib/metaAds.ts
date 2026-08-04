@@ -15,15 +15,30 @@ import type { MetaAdsConfig } from "./tenants";
 
 const GRAPH = "https://graph.facebook.com/v21.0";
 
+/** Nível de detalhe do relatório: a campanha inteira ou anúncio a anúncio. */
+export type Nivel = "campaign" | "ad";
+
 /** Uma linha de insight, já normalizada para o que o painel usa. */
 export type InsightCampanha = {
   campanhaId: string;
   campanha: string;
+  /** preenchidos só quando o relatório vem no nível de anúncio */
+  conjunto?: string;
+  anuncio?: string;
+  anuncioId?: string;
   investimento: number;
   impressoes: number;
   cliques: number;
-  /** leads que a própria Meta contabilizou (pode divergir da planilha) */
+  /** leads de formulário que a própria Meta contabilizou (pode divergir da planilha) */
   leadsMeta: number;
+  /**
+   * Conversas iniciadas no WhatsApp/Direct pelo anúncio. É o que salva a
+   * campanha de Click-to-WhatsApp de aparecer como "0 leads": o contato em si
+   * a Meta não entrega (só com a Cloud API), mas o volume ela informa.
+   */
+  conversas: number;
+  /** quantas dessas conversas tiveram resposta do cliente */
+  respostas: number;
 };
 
 export type ResultadoInsights =
@@ -33,6 +48,9 @@ export type ResultadoInsights =
 type LinhaCrua = {
   campaign_id?: string;
   campaign_name?: string;
+  adset_name?: string;
+  ad_id?: string;
+  ad_name?: string;
   spend?: string;
   impressions?: string;
   clicks?: string;
@@ -40,28 +58,45 @@ type LinhaCrua = {
   actions?: { action_type?: string; value?: string }[];
 };
 
+/** Lead de formulário — a pessoa preencheu e a Meta tem os dados dela. */
+const ACOES_DE_LEAD = new Set(["lead", "leadgen_grouped", "onsite_conversion.lead_grouped"]);
+
 /**
- * A Meta reporta lead de formulário e lead de conversa com nomes diferentes.
- * Somamos os dois — do ponto de vista do painel, ambos são "um lead".
+ * Conversa iniciada por anúncio de mensagem (Click-to-WhatsApp e Direct).
+ *
+ * A Meta reporta duas métricas parecidas e elas não batem: a primeira é a
+ * "Conversas por mensagem iniciadas" que aparece no Gerenciador de Anúncios;
+ * a segunda é mais ampla e dá um número maior. Usamos a primeira, e só caímos
+ * na segunda se ela não vier — o painel precisa bater com o que o cliente vê
+ * no Gerenciador, senão ninguém confia no número.
  */
-const ACOES_DE_LEAD = new Set([
-  "lead",
-  "leadgen_grouped",
-  "onsite_conversion.lead_grouped",
-  "onsite_conversion.messaging_conversation_started_7d",
-]);
+const ACAO_CONVERSA = "onsite_conversion.messaging_conversation_started_7d";
+const ACAO_CONVERSA_ALT = "onsite_conversion.total_messaging_connection";
+
+/** Quem respondeu depois da primeira mensagem — sinal de conversa de verdade. */
+const ACOES_DE_RESPOSTA = new Set(["onsite_conversion.messaging_first_reply"]);
 
 function numero(v: unknown): number {
   const n = Number(String(v ?? "").replace(",", "."));
   return Number.isFinite(n) ? n : 0;
 }
 
-function contarLeads(acoes: LinhaCrua["actions"]): number {
+function contar(acoes: LinhaCrua["actions"], tipos: Set<string>): number {
   let total = 0;
   for (const a of acoes || []) {
-    if (a.action_type && ACOES_DE_LEAD.has(a.action_type)) total += numero(a.value);
+    if (a.action_type && tipos.has(a.action_type)) total += numero(a.value);
   }
   return total;
+}
+
+/** Valor de uma ação específica, ou 0 se a Meta não reportou aquela ação. */
+function valorDaAcao(acoes: LinhaCrua["actions"], tipo: string): number {
+  const a = (acoes || []).find((x) => x.action_type === tipo);
+  return a ? numero(a.value) : 0;
+}
+
+function contarConversas(acoes: LinhaCrua["actions"]): number {
+  return valorDaAcao(acoes, ACAO_CONVERSA) || valorDaAcao(acoes, ACAO_CONVERSA_ALT);
 }
 
 /* ---------- cache ----------
@@ -220,7 +255,8 @@ export async function buscarInvestimento(
   cfg: MetaAdsConfig,
   tokenFallback: string | undefined,
   desde: string,
-  ate: string
+  ate: string,
+  nivel: Nivel = "campaign"
 ): Promise<ResultadoInsights> {
   const token = cfg.accessToken || tokenFallback || "";
   if (!cfg.adAccountId || !token) {
@@ -228,16 +264,22 @@ export async function buscarInvestimento(
   }
 
   const conta = contaFormatada(cfg.adAccountId);
-  const chave = `${conta}|${desde}|${ate}`;
+  const chave = `${conta}|${desde}|${ate}|${nivel}`;
   const emCache = doCache(chave);
   if (emCache) return emCache;
 
+  const campos =
+    nivel === "ad"
+      ? "campaign_id,campaign_name,adset_name,ad_id,ad_name,spend,impressions,clicks,actions,account_currency"
+      : "campaign_id,campaign_name,spend,impressions,clicks,actions,account_currency";
+
   const params = new URLSearchParams({
-    level: "campaign",
-    fields: "campaign_id,campaign_name,spend,impressions,clicks,actions,account_currency",
+    level: nivel,
+    fields: campos,
     time_range: JSON.stringify({ since: desde, until: ate }),
     time_increment: "all_days",
-    limit: "200",
+    // no nível de anúncio uma conta grande passa de 200 linhas
+    limit: nivel === "ad" ? "500" : "200",
     access_token: token,
   });
 
@@ -267,10 +309,15 @@ export async function buscarInvestimento(
         campanhas.push({
           campanhaId: String(linha.campaign_id || ""),
           campanha: String(linha.campaign_name || "(sem nome)"),
+          conjunto: linha.adset_name ? String(linha.adset_name) : undefined,
+          anuncio: linha.ad_name ? String(linha.ad_name) : undefined,
+          anuncioId: linha.ad_id ? String(linha.ad_id) : undefined,
           investimento: numero(linha.spend),
           impressoes: numero(linha.impressions),
           cliques: numero(linha.clicks),
-          leadsMeta: contarLeads(linha.actions),
+          leadsMeta: contar(linha.actions, ACOES_DE_LEAD),
+          conversas: contarConversas(linha.actions),
+          respostas: contar(linha.actions, ACOES_DE_RESPOSTA),
         });
       }
 

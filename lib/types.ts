@@ -18,6 +18,10 @@ export type Lead = {
   data: string;
   origem: string;
   campanha: string;
+  /** conjunto de anúncios (ad set) de origem, quando a planilha traz */
+  conjunto: string;
+  /** anúncio (criativo) de origem — é o nível onde o rastreamento fica útil */
+  anuncio: string;
   status: string;
   nota: string;
   whatsapp: string;

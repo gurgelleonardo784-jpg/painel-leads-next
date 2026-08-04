@@ -30,6 +30,26 @@ const PERIODOS = [
   { valor: 90, rotulo: "Últimos 90 dias" },
 ];
 
+const COLS_ANUNCIO = "2.6fr 1fr 0.9fr 0.9fr 1fr 1fr 0.8fr";
+
+/**
+ * A divergência entre a contagem da Meta e a da planilha.
+ * Não pinta de vermelho por ser negativa — divergir é normal. Só destaca o
+ * que passa de 25%, que é onde vale investigar.
+ */
+function Diferenca({ valor }: { valor: number | null }) {
+  if (valor === null) return <span className="num">—</span>;
+  const forte = Math.abs(valor) >= 25;
+  const classe = !forte ? "" : valor < 0 ? "ruim" : "alerta";
+  const sinal = valor > 0 ? "+" : "";
+  return (
+    <span className={`num ${classe}`} title={forte ? "Divergência alta — vale conferir" : undefined}>
+      {sinal}
+      {valor.toFixed(0)}%
+    </span>
+  );
+}
+
 export default function Dashboard({
   tenant,
   leads,
@@ -54,7 +74,7 @@ export default function Dashboard({
       const data = await res.json().catch(() => null);
       if (!vivo) return;
       const c = data?.custo as
-        | { campanhas: InsightCampanha[]; moeda: string; erro?: string }
+        | { campanhas: InsightCampanha[]; anuncios?: InsightCampanha[]; moeda: string; erro?: string }
         | null
         | undefined;
       setCusto(c ?? null);
@@ -78,6 +98,10 @@ export default function Dashboard({
     () => (canal ? m.campanhas.filter((c) => c.canal === canal) : m.campanhas),
     [m.campanhas, canal]
   );
+  const anuncios = useMemo(
+    () => (canal ? m.anuncios.filter((a) => a.canal === canal) : m.anuncios),
+    [m.anuncios, canal]
+  );
 
   // KPIs recalculam com o filtro de canal
   const agregado = useMemo(() => {
@@ -86,7 +110,20 @@ export default function Dashboard({
     const qualif = campanhas.reduce((s, c) => s + c.qualificados, 0);
     const ganhos = campanhas.reduce((s, c) => s + c.ganhos, 0);
     const receita = campanhas.reduce((s, c) => s + c.receita, 0);
-    return { investimento, nLeads, qualif, ganhos, receita };
+    const conversas = campanhas.reduce((s, c) => s + c.conversas, 0);
+    // custo por conversa só sobre o gasto das campanhas que geraram conversa
+    const gastoConversas = campanhas
+      .filter((c) => c.conversas > 0)
+      .reduce((s, c) => s + (c.investimento || 0), 0);
+    return {
+      investimento,
+      nLeads,
+      qualif,
+      ganhos,
+      receita,
+      conversas,
+      custoConversa: conversas > 0 ? gastoConversas / conversas : null,
+    };
   }, [campanhas]);
 
   const maxDia = Math.max(...m.serie.map((p) => p.leads), 1);
@@ -95,10 +132,15 @@ export default function Dashboard({
   const maxOrigem = Math.max(...m.origens.map((o) => o.leads), 1);
   const pico = m.serie.reduce((a, p) => Math.max(a, p.leads), 0);
 
-  // colunas das cores da tabela mudam se não há receita para mostrar
+  // campanha de mensagem não gera lead na planilha; o que ela gera é conversa
+  const temConversas = campanhas.some((c) => c.conversas > 0);
+
+  // as colunas da tabela seguem o que existe: sem receita, sem coluna de receita
   const colunas = temReceita
-    ? "2.6fr 1.1fr 0.9fr 0.9fr 1.1fr 0.8fr 1fr 0.7fr 1fr"
-    : "2.6fr 1.2fr 1fr 1fr 1.1fr 0.9fr";
+    ? "2.4fr 1fr 0.9fr 0.8fr 1fr 0.9fr 0.8fr 1fr 0.7fr 1fr"
+    : temConversas
+      ? "2.4fr 1.1fr 1fr 0.9fr 1fr 1fr 1.1fr"
+      : "2.6fr 1.2fr 1fr 1fr 1.1fr 0.9fr";
 
   return (
     <>
@@ -160,12 +202,25 @@ export default function Dashboard({
           sub="média ponderada"
           cor="var(--etapa-contato)"
         />
-        <Kpi
-          rotulo="Qualificados"
-          valor={inteiro(agregado.qualif)}
-          sub={agregado.nLeads ? `${percentual((agregado.qualif / agregado.nLeads) * 100)} dos leads` : "—"}
-          cor="var(--etapa-qualificado)"
-        />
+        {temConversas ? (
+          <Kpi
+            rotulo="Conversas no WhatsApp"
+            valor={inteiro(agregado.conversas)}
+            sub={
+              agregado.custoConversa !== null
+                ? `${moeda(agregado.custoConversa, cod)} por conversa`
+                : "iniciadas por anúncio"
+            }
+            cor="var(--tipo-whats)"
+          />
+        ) : (
+          <Kpi
+            rotulo="Qualificados"
+            valor={inteiro(agregado.qualif)}
+            sub={agregado.nLeads ? `${percentual((agregado.qualif / agregado.nLeads) * 100)} dos leads` : "—"}
+            cor="var(--etapa-qualificado)"
+          />
+        )}
         <Kpi
           rotulo="Receita gerada"
           valor={temReceita ? moeda(agregado.receita, cod) : "—"}
@@ -291,9 +346,15 @@ export default function Dashboard({
                 <span>Campanha</span>
                 <span>Volume</span>
                 <span>Investido</span>
-                <span>Leads</span>
+                <span title="Leads que chegaram na planilha">Leads</span>
+                {temConversas && (
+                  <>
+                    <span>Conversas</span>
+                    <span>Custo/conversa</span>
+                  </>
+                )}
                 <span>CPL</span>
-                <span>Qualif.</span>
+                {!temConversas && <span>Qualif.</span>}
                 {temReceita && (
                   <>
                     <span>Receita</span>
@@ -324,11 +385,23 @@ export default function Dashboard({
                     {c.investimento === null ? "Orgânico" : moeda(c.investimento, cod)}
                   </span>
                   <span className="num forte">{inteiro(c.leads)}</span>
+                  {temConversas && (
+                    <>
+                      <span className="num forte" style={{ color: "var(--tipo-whats)" }}>
+                        {c.conversas > 0 ? inteiro(c.conversas) : "—"}
+                      </span>
+                      <span className="num">
+                        {c.custoPorConversa === null ? "—" : moeda(c.custoPorConversa, cod)}
+                      </span>
+                    </>
+                  )}
                   <span className="num">{c.cpl === null ? "—" : moeda(c.cpl, cod)}</span>
-                  <span style={{ fontSize: 12, color: "var(--etapa-qualificado)" }}>
-                    {inteiro(c.qualificados)}
-                    {c.leads > 0 && ` (${Math.round((c.qualificados / c.leads) * 100)}%)`}
-                  </span>
+                  {!temConversas && (
+                    <span style={{ fontSize: 12, color: "var(--etapa-qualificado)" }}>
+                      {inteiro(c.qualificados)}
+                      {c.leads > 0 && ` (${Math.round((c.qualificados / c.leads) * 100)}%)`}
+                    </span>
+                  )}
                   {temReceita && (
                     <>
                       <span className="num bom">{c.receita > 0 ? moeda(c.receita, cod) : "—"}</span>
@@ -350,6 +423,78 @@ export default function Dashboard({
           </div>
         )}
       </div>
+
+      {/* rastreamento por anúncio: Meta x planilha */}
+      {anuncios.length > 0 && (
+        <div className="bloco-tabela">
+          <div className="cab">
+            <div>
+              <div style={{ fontSize: 14.5, fontWeight: 600 }}>Rastreamento por anúncio</div>
+              <div style={{ fontSize: 12.5, color: "var(--txt4)", marginTop: 3 }}>
+                O que a Meta reporta contra o que realmente chegou na planilha
+              </div>
+            </div>
+            <span className="secao-meta">
+              {m.comAnuncio} de {m.total} leads têm anúncio de origem
+            </span>
+          </div>
+
+          {m.comAnuncio === 0 && (
+            <div style={{ padding: "0 22px 14px" }}>
+              <p className="aviso-inline aviso-atencao">
+                <b>A planilha não tem coluna de anúncio.</b> Sem ela dá para ver o que a Meta
+                reporta, mas não dá para conferir contra o que chegou. Acrescente uma coluna{" "}
+                <b>Anúncio</b> (e <b>Conjunto</b>) na planilha — a integração nativa do Meta já
+                preenche as duas.
+              </p>
+            </div>
+          )}
+
+          <div className="tabela-rolagem rolagem">
+            <div style={{ minWidth: 980 }}>
+              <div className="linha-camp cabecalho" style={{ gridTemplateColumns: COLS_ANUNCIO }}>
+                <span>Anúncio</span>
+                <span>Investido</span>
+                <span>Meta diz</span>
+                <span>Chegou</span>
+                <span>Diferença</span>
+                <span>CPL real</span>
+                <span>Qualif.</span>
+              </div>
+
+              {anuncios.slice(0, 25).map((a, i) => (
+                <div
+                  className="linha-camp"
+                  key={a.anuncio + i}
+                  style={{ gridTemplateColumns: COLS_ANUNCIO }}
+                >
+                  <div className="camp-nome">
+                    <span className="ponto" style={{ background: corDoCanal(a.canal) }} />
+                    <div style={{ minWidth: 0 }}>
+                      <div className="n truncar" title={a.anuncio}>
+                        {a.anuncio}
+                      </div>
+                      <div className="utm truncar" title={`${a.campanha} · ${a.conjunto}`}>
+                        {[a.campanha, a.conjunto].filter(Boolean).join(" · ") || "—"}
+                      </div>
+                    </div>
+                  </div>
+                  <span className="num">
+                    {a.investimento > 0 ? moeda(a.investimento, cod) : "—"}
+                  </span>
+                  <span className="num">{a.leadsMeta > 0 ? inteiro(a.leadsMeta) : "—"}</span>
+                  <span className="num forte">{inteiro(a.leadsPlanilha)}</span>
+                  <Diferenca valor={a.divergencia} />
+                  <span className="num">{a.cpl === null ? "—" : moeda(a.cpl, cod)}</span>
+                  <span style={{ fontSize: 12, color: "var(--etapa-qualificado)" }}>
+                    {inteiro(a.qualificados)}
+                  </span>
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* funil + origens */}
       <div className="grid-funil">
