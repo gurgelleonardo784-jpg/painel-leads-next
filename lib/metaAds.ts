@@ -39,6 +39,14 @@ export type InsightCampanha = {
   conversas: number;
   /** quantas dessas conversas tiveram resposta do cliente */
   respostas: number;
+  /**
+   * Conversas que passaram de 3 mensagens. Sem a Cloud API não temos o
+   * contato, mas profundidade de conversa é o sinal mais próximo de "esse
+   * lead é real" — quem trocou 3 mensagens não foi curioso de passagem.
+   */
+  engajadas: number;
+  /** conversas que passaram de 5 mensagens */
+  profundas: number;
 };
 
 export type ResultadoInsights =
@@ -75,6 +83,10 @@ const ACAO_CONVERSA_ALT = "onsite_conversion.total_messaging_connection";
 
 /** Quem respondeu depois da primeira mensagem — sinal de conversa de verdade. */
 const ACOES_DE_RESPOSTA = new Set(["onsite_conversion.messaging_first_reply"]);
+
+/** Profundidade da conversa: 3+ e 5+ mensagens trocadas. */
+const ACAO_3_MSG = "onsite_conversion.messaging_user_depth_3_message_send";
+const ACAO_5_MSG = "onsite_conversion.messaging_user_depth_5_message_send";
 
 function numero(v: unknown): number {
   const n = Number(String(v ?? "").replace(",", "."));
@@ -318,6 +330,8 @@ export async function buscarInvestimento(
           leadsMeta: contar(linha.actions, ACOES_DE_LEAD),
           conversas: contarConversas(linha.actions),
           respostas: contar(linha.actions, ACOES_DE_RESPOSTA),
+          engajadas: valorDaAcao(linha.actions, ACAO_3_MSG),
+          profundas: valorDaAcao(linha.actions, ACAO_5_MSG),
         });
       }
 

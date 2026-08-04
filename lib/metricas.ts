@@ -221,6 +221,12 @@ export type AnuncioMetrica = {
   leadsPlanilha: number;
   divergencia: number | null;
   conversas: number;
+  /** conversas que passaram de 3 mensagens — o filtro de curioso */
+  engajadas: number;
+  respostas: number;
+  /** investimento dividido pelas conversas engajadas */
+  custoPorEngajada: number | null;
+  custoPorConversa: number | null;
   qualificados: number;
   ganhos: number;
   receita: number;
@@ -439,6 +445,10 @@ function reconciliarAnuncios(leads: Lead[], insights: InsightCampanha[]): Anunci
       leadsPlanilha: naPlanilha,
       divergencia: ins.leadsMeta > 0 ? ((naPlanilha - ins.leadsMeta) / ins.leadsMeta) * 100 : null,
       conversas: ins.conversas,
+      engajadas: ins.engajadas,
+      respostas: ins.respostas,
+      custoPorConversa: ins.conversas > 0 ? ins.investimento / ins.conversas : null,
+      custoPorEngajada: ins.engajadas > 0 ? ins.investimento / ins.engajadas : null,
       qualificados: g?.qual || 0,
       ganhos: g?.ganhos || 0,
       receita: g?.receita || 0,
@@ -462,6 +472,10 @@ function reconciliarAnuncios(leads: Lead[], insights: InsightCampanha[]): Anunci
       leadsPlanilha: g.leads,
       divergencia: null,
       conversas: 0,
+      engajadas: 0,
+      respostas: 0,
+      custoPorConversa: null,
+      custoPorEngajada: null,
       qualificados: g.qual,
       ganhos: g.ganhos,
       receita: g.receita,

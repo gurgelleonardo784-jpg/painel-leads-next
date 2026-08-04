@@ -31,6 +31,7 @@ const PERIODOS = [
 ];
 
 const COLS_ANUNCIO = "2.6fr 1fr 0.9fr 0.9fr 1fr 1fr 0.8fr";
+const COLS_WHATS = "2.4fr 1fr 0.9fr 1.1fr 1.1fr 1.1fr 1.1fr";
 
 /**
  * A divergência entre a contagem da Meta e a da planilha.
@@ -101,6 +102,12 @@ export default function Dashboard({
   const anuncios = useMemo(
     () => (canal ? m.anuncios.filter((a) => a.canal === canal) : m.anuncios),
     [m.anuncios, canal]
+  );
+  // anúncios de mensagem ganham tabela própria: as colunas que importam neles
+  // (conversas, profundidade) não fazem sentido nos de formulário
+  const anunciosWhats = useMemo(
+    () => anuncios.filter((a) => a.conversas > 0).sort((x, y) => y.conversas - x.conversas),
+    [anuncios]
   );
 
   // KPIs recalculam com o filtro de canal
@@ -423,6 +430,91 @@ export default function Dashboard({
           </div>
         )}
       </div>
+
+      {/* campanhas de mensagem: o funil que existe sem a Cloud API */}
+      {anunciosWhats.length > 0 && (
+        <div className="bloco-tabela">
+          <div className="cab">
+            <div>
+              <div style={{ fontSize: 14.5, fontWeight: 600 }}>
+                Campanhas de WhatsApp — por anúncio
+              </div>
+              <div style={{ fontSize: 12.5, color: "var(--txt4)", marginTop: 3 }}>
+                Quantas conversas cada criativo abriu e quantas foram adiante
+              </div>
+            </div>
+            <span className="secao-meta">Fonte: Meta · contato individual exige Cloud API</span>
+          </div>
+
+          <div className="tabela-rolagem rolagem">
+            <div style={{ minWidth: 1020 }}>
+              <div className="linha-camp cabecalho" style={{ gridTemplateColumns: COLS_WHATS }}>
+                <span>Anúncio</span>
+                <span>Investido</span>
+                <span>Conversas</span>
+                <span>Custo/conversa</span>
+                <span title="Responderam a primeira mensagem">Responderam</span>
+                <span title="Trocaram 3 mensagens ou mais">3+ mensagens</span>
+                <span title="Investimento dividido pelas conversas que passaram de 3 mensagens">
+                  Custo/engajada
+                </span>
+              </div>
+
+              {anunciosWhats.map((a, i) => (
+                <div
+                  className="linha-camp"
+                  key={a.anuncio + i}
+                  style={{ gridTemplateColumns: COLS_WHATS }}
+                >
+                  <div className="camp-nome">
+                    <span className="ponto" style={{ background: "var(--tipo-whats)" }} />
+                    <div style={{ minWidth: 0 }}>
+                      <div className="n truncar" title={a.anuncio}>
+                        {a.anuncio}
+                      </div>
+                      <div className="utm truncar">{a.campanha}</div>
+                    </div>
+                  </div>
+                  <span className="num">{moeda(a.investimento, cod)}</span>
+                  <span className="num forte" style={{ color: "var(--tipo-whats)" }}>
+                    {inteiro(a.conversas)}
+                  </span>
+                  <span className="num">
+                    {a.custoPorConversa === null ? "—" : moeda(a.custoPorConversa, cod)}
+                  </span>
+                  <span className="num">
+                    {inteiro(a.respostas)}
+                    {a.conversas > 0 && (
+                      <span style={{ color: "var(--txt5)" }}>
+                        {" "}
+                        ({Math.round((a.respostas / a.conversas) * 100)}%)
+                      </span>
+                    )}
+                  </span>
+                  <span className="num">
+                    {inteiro(a.engajadas)}
+                    {a.conversas > 0 && (
+                      <span style={{ color: "var(--txt5)" }}>
+                        {" "}
+                        ({Math.round((a.engajadas / a.conversas) * 100)}%)
+                      </span>
+                    )}
+                  </span>
+                  <span className="num forte">
+                    {a.custoPorEngajada === null ? "—" : moeda(a.custoPorEngajada, cod)}
+                  </span>
+                </div>
+              ))}
+            </div>
+          </div>
+
+          <p className="secao-meta" style={{ padding: "12px 22px 16px", lineHeight: 1.5 }}>
+            <b>Custo/engajada</b> é o número que mais se aproxima de custo por lead nessas
+            campanhas: quem trocou 3 mensagens ou mais não foi curioso de passagem. O telefone
+            dessas pessoas só chega ao painel com o número na WhatsApp Cloud API.
+          </p>
+        </div>
+      )}
 
       {/* rastreamento por anúncio: Meta x planilha */}
       {anuncios.length > 0 && (
