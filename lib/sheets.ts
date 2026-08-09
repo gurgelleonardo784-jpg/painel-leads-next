@@ -221,6 +221,7 @@ export async function lerLeads(tenant: Tenant): Promise<Lead[]> {
       temperatura: "",
       primeiraMensagem: "",
       utm: "",
+      atribuicao: null, // preenchido em /api/leads, a partir do banco
       leadId: "",
       gclid: "",
       gbraid: "",
@@ -412,10 +413,15 @@ export async function registrarConversao(
 
 /* ---------- webhook (porta gravarLead_) ---------- */
 
+/**
+ * Acrescenta uma linha de lead. Devolve o `ID` interno gerado, que é como
+ * encontrar essa mesma linha depois (o espelho da atribuição usa isso para
+ * preencher campanha/conjunto/anúncio quando a Graph API responder).
+ */
 export async function gravarLeadWebhook(
   tenant: Tenant,
   dados: Record<string, string>
-): Promise<void> {
+): Promise<string> {
   const sheets = getSheetsClient();
   const aba = tenant.aba;
 
@@ -462,7 +468,8 @@ export async function gravarLeadWebhook(
 
   const linha: string[] = new Array(cab.length).fill("");
   Object.keys(dados).forEach((chave) => { linha[destino[chave]] = dados[chave]; });
-  linha[cab.indexOf(COL_ID)] = novoId();
+  const id = novoId();
+  linha[cab.indexOf(COL_ID)] = id;
   linha[cab.indexOf(COL_STATUS)] = tenant.status[0];
   const iData = cab.indexOf("Data");
   if (iData !== -1 && !linha[iData]) linha[iData] = agoraTexto(tenant.tz);
@@ -474,6 +481,78 @@ export async function gravarLeadWebhook(
     insertDataOption: "INSERT_ROWS",
     requestBody: { values: [linha] },
   });
+
+  return id;
+}
+
+/**
+ * Preenche colunas de uma linha já existente, achada pelo `ID`.
+ *
+ * É o que fecha o ciclo do §37 na planilha: o lead entra na hora com telefone
+ * e mensagem, e campanha/conjunto/anúncio aparecem quando a Graph API responde.
+ * Usa o mesmo mapeamento de papéis da gravação, para escrever na coluna
+ * "Campanha" que já existe em vez de criar uma segunda ao lado dela.
+ *
+ * Devolve `false` se a linha não foi encontrada — nunca lança por isso: uma
+ * linha apagada à mão não pode derrubar o processamento do lead.
+ */
+export async function atualizarColunasLead(
+  tenant: Tenant,
+  id: string,
+  valores: Record<string, string>
+): Promise<boolean> {
+  const preenchidos = Object.keys(valores).filter((k) => String(valores[k] ?? "").trim() !== "");
+  if (!id || !preenchidos.length) return false;
+
+  const sheets = getSheetsClient();
+  const resp = await sheets.spreadsheets.values.get({
+    spreadsheetId: tenant.spreadsheetId,
+    range: tenant.aba,
+  });
+  const linhas = (resp.data.values || []) as unknown[][];
+  if (!linhas.length) return false;
+
+  const cab = linhas[0].map(String);
+  const iId = cab.indexOf(COL_ID);
+  if (iId === -1) return false;
+
+  let linhaNum = -1;
+  for (let r = 1; r < linhas.length; r++) {
+    if (String(linhas[r][iId] ?? "") === String(id)) { linhaNum = r + 1; break; }
+  }
+  if (linhaNum === -1) return false;
+
+  // onde cada papel (campanha/conjunto/anúncio) já mora no cabeçalho
+  const papeis = mapearCabecalho(cab);
+  const porPapel: Partial<Record<Papel, number>> = {};
+  for (const k of Object.keys(papeis)) {
+    const papel = papeis[Number(k)];
+    if (typeof porPapel[papel] === "undefined") porPapel[papel] = Number(k);
+  }
+
+  const updates: { range: string; values: string[][] }[] = [];
+  for (const chave of preenchidos) {
+    let i = cab.indexOf(chave);
+    if (i === -1) {
+      const papel = mapearCabecalho([chave])[0];
+      if (papel && typeof porPapel[papel] !== "undefined") i = porPapel[papel] as number;
+    }
+    if (i === -1) {
+      i = cab.length;
+      cab.push(chave);
+      updates.push({ range: `${tenant.aba}!${colLetter(i + 1)}1`, values: [[chave]] });
+    }
+    updates.push({
+      range: `${tenant.aba}!${colLetter(i + 1)}${linhaNum}`,
+      values: [[valores[chave]]],
+    });
+  }
+
+  await sheets.spreadsheets.values.batchUpdate({
+    spreadsheetId: tenant.spreadsheetId,
+    requestBody: { valueInputOption: "RAW", data: updates },
+  });
+  return true;
 }
 
 function soDigitos(s: string): string {

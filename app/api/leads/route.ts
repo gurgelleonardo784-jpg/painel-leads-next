@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { tenantDaSessao } from "@/lib/auth";
-import { lerLeads, gravarLeadWebhook } from "@/lib/sheets";
+import { gravarLeadWebhook } from "@/lib/sheets";
+import { carregarLeadsDoPainel } from "@/lib/leadsPainel";
 
 export const dynamic = "force-dynamic";
 
@@ -10,11 +11,13 @@ export async function GET(req: Request) {
   if (!tenant) return NextResponse.json({ ok: false, erro: "sessao" }, { status: 401 });
 
   try {
-    const leads = await lerLeads(tenant);
+    const { leads, semPlanilha, erroPlanilha } = await carregarLeadsDoPainel(tenant);
     return NextResponse.json({
       ok: true,
       leads,
       status: tenant.status,
+      semPlanilha,
+      erroPlanilha,
       atualizadoEm: new Date().toISOString(),
     });
   } catch (e) {

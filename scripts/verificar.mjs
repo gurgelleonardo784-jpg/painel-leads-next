@@ -5,6 +5,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import googleapis from "googleapis";
+import pg from "pg";
 
 const { google } = googleapis;
 const raiz = process.cwd();
@@ -46,6 +47,63 @@ function carregarTenants() {
   return [];
 }
 
+// ---- banco de leads ----
+const TABELAS = ["clients", "whatsapp_accounts", "leads", "messages", "attribution_events"];
+
+async function checarBanco() {
+  const url = process.env.DATABASE_URL;
+  const local = /@(localhost|127\.0\.0\.1)[:/]/.test(url) || /sslmode=disable/.test(url);
+  const cliente = new pg.Client({
+    connectionString: url,
+    ssl: local ? undefined : { rejectUnauthorized: false },
+  });
+
+  try {
+    await cliente.connect();
+    ok("Conectou no Postgres");
+  } catch (e) {
+    falta("DATABASE_URL definida, mas não conectou: " + (e && e.message ? e.message : String(e)));
+    return;
+  }
+
+  try {
+    const { rows } = await cliente.query(
+      `SELECT table_name FROM information_schema.tables
+        WHERE table_schema = 'public' AND table_name = ANY($1)`,
+      [TABELAS]
+    );
+    const existentes = rows.map((r) => r.table_name);
+    const faltando = TABELAS.filter((t) => !existentes.includes(t));
+    if (faltando.length) {
+      falta(`Tabelas ausentes (${faltando.join(", ")}) — rode: npm run migrar`);
+      return;
+    }
+    ok("Tabelas do rastreamento criadas");
+
+    const { rows: n } = await cliente.query(
+      `SELECT (SELECT count(*) FROM leads)                                     AS leads,
+              (SELECT count(*) FROM messages)                                  AS mensagens,
+              (SELECT count(*) FROM leads WHERE attribution_status='attributed') AS atribuidos,
+              (SELECT count(*) FROM leads WHERE attribution_status='organic')    AS organicos,
+              (SELECT count(*) FROM leads
+                WHERE ad_id IS NOT NULL AND campaign_name IS NULL
+                  AND enriched_at IS NULL)                                     AS pendentes,
+              (SELECT count(*) FROM leads WHERE sheet_lead_id IS NULL
+                 AND source='whatsapp')                                        AS sem_planilha`
+    );
+    const c = n[0];
+    ok(`${c.leads} lead(s), ${c.mensagens} mensagem(ns) — ${c.atribuidos} atribuído(s), ${c.organicos} orgânico(s)`);
+    if (Number(c.pendentes) > 0)
+      aviso(`${c.pendentes} lead(s) com anúncio mas sem nome de campanha — rode o job /api/jobs/atribuicao`);
+    if (Number(c.sem_planilha) > 0)
+      aviso(`${c.sem_planilha} lead(s) do WhatsApp sem linha na planilha — o job também conserta isso`);
+  } catch (e) {
+    falta("Erro ao ler o banco: " + (e && e.message ? e.message : String(e)));
+  } finally {
+    await cliente.end().catch(() => {});
+  }
+}
+
 async function main() {
   carregarEnv();
 
@@ -70,6 +128,19 @@ async function main() {
   process.env.META_ADS_TOKEN
     ? ok("META_ADS_TOKEN definido (token de anúncios da agência)")
     : aviso("META_ADS_TOKEN vazio — sem ele, cada cliente precisa do próprio token de ads_read");
+
+  titulo("1c. Banco de leads (rastreamento do WhatsApp)");
+  if (!process.env.DATABASE_URL) {
+    aviso(
+      "DATABASE_URL vazia — o webhook do WhatsApp grava só na planilha: sem histórico\n" +
+        "    de mensagens, sem campanha/conjunto/anúncio e sem trava contra evento duplicado."
+    );
+  } else {
+    await checarBanco();
+  }
+  process.env.CRON_SECRET
+    ? ok("CRON_SECRET definido (job de atribuição habilitado)")
+    : aviso("CRON_SECRET vazio — /api/jobs/atribuicao responde 503 e a atribuição que falhar não é refeita");
 
   const tenants = carregarTenants();
   titulo(`2. Tenants (${tenants.length} encontrado(s))`);
@@ -133,9 +204,11 @@ async function main() {
         : aviso('Coluna "ctwa_clid" será criada no 1º lead que vier de um anúncio Click-to-WhatsApp');
       // mesma regra do mapearCabecalho_ em lib/sheets.ts
       const colTel = cab.find((h) => /(telefone|whats|celular|phone|fone|^numero)/.test(normal(h)));
-      colTel
-        ? ok(`Coluna de telefone "${colTel}" — usada para não duplicar o mesmo contato`)
-        : falta("Sem coluna de telefone reconhecível: cada mensagem viraria um lead novo. Nomeie a coluna como \"Telefone\".");
+      if (colTel) ok(`Coluna de telefone "${colTel}"`);
+      else if (process.env.DATABASE_URL)
+        aviso('Sem coluna de telefone reconhecível: o lead não duplica (isso é o banco que garante), mas o telefone não aparece no card. Nomeie a coluna como "Telefone".');
+      else
+        falta('Sem coluna de telefone reconhecível e sem banco: cada mensagem viraria um lead novo. Nomeie a coluna como "Telefone".');
     }
 
     // dashboard: data e investimento

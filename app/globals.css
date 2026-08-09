@@ -559,6 +559,145 @@ textarea {
   background: var(--superficie-3);
 }
 
+/* faixa que nomeia o recorte quando há filtro ativo */
+.recorte {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  flex-wrap: wrap;
+  padding: 10px 14px;
+  border-radius: var(--raio-campo);
+  border: 1px solid var(--marca-borda, var(--linha));
+  background: color-mix(in srgb, var(--marca) 6%, transparent);
+  font-size: 12.5px;
+}
+.recorte b {
+  font-size: 13.5px;
+  font-weight: 600;
+}
+.recorte span {
+  color: var(--txt4);
+}
+
+/* número clicável numa tabela: leva para a lista dos leads daquela linha */
+.link-num {
+  background: none;
+  border: 0;
+  padding: 0;
+  cursor: pointer;
+  color: var(--marca);
+  text-align: inherit;
+  font: inherit;
+  text-decoration: underline;
+  text-decoration-color: color-mix(in srgb, var(--marca) 40%, transparent);
+  text-underline-offset: 3px;
+}
+.link-num:hover {
+  text-decoration-color: var(--marca);
+}
+
+/* ------------- composição por origem e conferência (§25, §34) ------------- */
+
+.origem-cards {
+  display: grid;
+  grid-template-columns: repeat(5, 1fr);
+  gap: 1px;
+  background: var(--linha);
+  border-top: 1px solid var(--linha);
+  border-bottom: 1px solid var(--linha);
+}
+.origem-card {
+  background: var(--superficie);
+  padding: 15px 20px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  min-width: 0;
+}
+.origem-card .rotulo {
+  font-size: 11.5px;
+  font-weight: 500;
+  color: var(--txt4);
+}
+.origem-card .valor {
+  font-size: 26px;
+  font-weight: 600;
+  letter-spacing: -0.03em;
+  line-height: 1;
+  font-variant-numeric: tabular-nums;
+}
+.origem-card .barra {
+  height: 3px;
+  border-radius: 2px;
+  background: var(--superficie-3, var(--superficie-2));
+  overflow: hidden;
+}
+.origem-card .barra > div {
+  height: 100%;
+  border-radius: 2px;
+}
+.origem-card .sub {
+  font-size: 11px;
+  color: var(--txt6);
+  font-variant-numeric: tabular-nums;
+}
+
+/* os três números do §34 lado a lado: Meta, painel, diferença */
+.conferencia {
+  display: flex;
+  align-items: stretch;
+  gap: 0;
+  border-top: 1px solid var(--linha);
+  border-bottom: 1px solid var(--linha);
+  flex-wrap: wrap;
+}
+.conf-item {
+  flex: 1 1 180px;
+  padding: 16px 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+}
+.conf-item .rotulo {
+  font-size: 11.5px;
+  font-weight: 500;
+  color: var(--txt4);
+}
+.conf-item .valor {
+  font-size: 28px;
+  font-weight: 600;
+  letter-spacing: -0.03em;
+  line-height: 1;
+  font-variant-numeric: tabular-nums;
+}
+.conf-item .sub {
+  font-size: 11.5px;
+  color: var(--txt6);
+  line-height: 1.4;
+}
+.conf-sinal {
+  align-self: center;
+  font-family: var(--mono);
+  font-size: 15px;
+  color: var(--txt6);
+  padding: 0 4px;
+}
+
+@media (max-width: 900px) {
+  .origem-cards {
+    grid-template-columns: repeat(2, 1fr);
+  }
+  .conf-sinal {
+    display: none;
+  }
+}
+@media (max-width: 560px) {
+  .origem-cards {
+    grid-template-columns: 1fr;
+  }
+}
+
 /* --------------------------- KPIs ----------------------------- */
 
 .kpis {
@@ -1069,6 +1208,84 @@ textarea {
 :root[data-theme="light"] .caixa-obs {
   border-color: var(--marca-borda);
 }
+/* ---------- atribuição publicitária no detalhe do lead ---------- */
+
+/* campanha / conjunto / anúncio: os três níveis, sempre os três, mesmo vazios —
+   é a ausência que informa "este lead não veio de anúncio identificado" */
+.atrib-grade {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+.atrib-linha {
+  display: grid;
+  grid-template-columns: 78px 1fr;
+  gap: 10px;
+  align-items: baseline;
+  padding: 4px 0;
+}
+.atrib-rotulo {
+  font-size: 11px;
+  color: var(--txt6);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+.atrib-valor {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--txt);
+  word-break: break-word;
+}
+.atrib-valor.vazio {
+  color: var(--txt6);
+  font-weight: 400;
+}
+
+/* ---------- conversa do WhatsApp ---------- */
+
+.conversa {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  max-height: 340px;
+  overflow-y: auto;
+}
+.msg {
+  border-radius: var(--raio-qa);
+  border: 1px solid var(--linha-card);
+  background: var(--superficie-2);
+  padding: 9px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  /* borda no lado de quem falou: recebida à esquerda, enviada à direita */
+  border-left: 2px solid var(--tipo-whats);
+}
+.msg-saida {
+  border-left: 1px solid var(--linha-card);
+  border-right: 2px solid var(--marca);
+  background: var(--superficie-sutil);
+}
+.msg-cab {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  font-size: 10.5px;
+  color: var(--txt6);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+.msg-texto {
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--txt);
+  word-break: break-word;
+}
+.msg-texto.vazio {
+  color: var(--txt6);
+  font-style: italic;
+}
+
 .qa-num {
   font-family: var(--mono);
   font-size: 10.5px;
@@ -1092,6 +1309,16 @@ textarea {
   display: flex;
   gap: 6px;
   flex-wrap: wrap;
+}
+/* lead sem linha na planilha: o botão não tem onde gravar, e tem que parecer
+   isso — botão que parece clicável e não faz nada é pior que botão apagado */
+.etapa-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+textarea:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
 }
 .etapa-btn {
   height: 32px;

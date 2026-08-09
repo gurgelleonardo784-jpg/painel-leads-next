@@ -31,6 +31,16 @@ export function Mais({ size = 14 }: P) {
   );
 }
 
+export function Baixar({ size = 14 }: P) {
+  return (
+    <svg {...base(size)} strokeWidth={2.2}>
+      <path d="M12 3v11" />
+      <path d="M8 10.5 12 14.5l4-4" />
+      <path d="M4 19h16" />
+    </svg>
+  );
+}
+
 export function Sol({ size = 15 }: P) {
   return (
     <svg {...base(size)}>

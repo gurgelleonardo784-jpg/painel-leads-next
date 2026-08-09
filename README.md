@@ -17,11 +17,14 @@ app/
   api/
     login/route.ts         POST: valida senha do tenant, cria cookie de sessão
     logout/route.ts        POST: encerra sessão
-    leads/route.ts         GET: lê os leads do tenant logado
+    leads/route.ts         GET: lê os leads (planilha + banco costurados)
     leads/[id]/route.ts    PATCH: grava status/anotação (+ devolve a conversão)
+    leads/mensagens/route.ts GET: histórico da conversa de um contato
+    leads/export/route.ts  GET: a lista em CSV
     webhook/[slug]/route.ts POST: recebe leads (Google Ads nativo / Meta / JSON livre)
     meta/route.ts          webhook de leadgen do Meta
     whatsapp/route.ts      webhook do WhatsApp Cloud API (Click-to-WhatsApp)
+    jobs/atribuicao/route.ts  cron: completa a atribuição que falhou
     admin/...              login e CRUD de clientes (protegido por ADMIN_SENHA)
 components/
   Painel.tsx               shell do cliente: KPIs, filtros, módulos
@@ -46,9 +49,24 @@ lib/
   metaAds.ts               investimento por campanha (Marketing API) + cache
   metricas.ts              motor de métricas, puro e sem I/O
   apresentacao.ts          como o lead aparece: nome, telefone, cor, tempo
-  whatsapp.ts              traduz o payload do WhatsApp em colunas de lead
   rateLimit.ts             freio de tentativas de senha
   format.ts / types.ts     utilitários e tipos de cliente
+  -- rastreamento do WhatsApp --
+  leadsPainel.ts           costura planilha + banco na lista que o painel usa
+  whatsapp.ts              lê o payload do webhook (referral inteiro)
+  atribuicao.ts            motor de atribuição: os 4 níveis + Graph API do anúncio
+  repositorio.ts           gravação no banco, com a idempotência por message_id
+  processarWhatsapp.ts     liga webhook -> banco -> Meta -> planilha
+  espelho.ts               a linha do lead na planilha do cliente
+  db.ts                    pool do Postgres
+  schema.sql               as 5 tabelas
+  cripto.ts                AES-256-GCM para tokens da Meta
+  registro.ts              log estruturado dos eventos
+scripts/
+  verificar.mjs            diagnóstico: ambiente, planilhas, banco
+  migrar.mjs               aplica o schema.sql
+  testar.ts                testes do referral e da atribuição
+  testar-banco.mts         testes de gravação contra Postgres em memória
 ```
 
 ## Configuração
@@ -68,10 +86,26 @@ Copie `.env.example` para `.env.local` e preencha. Obrigatórias:
 `META_WHATSAPP_VERIFY_TOKEN`) só fazem falta se você for receber lead direto do
 Meta/WhatsApp.
 
-Rode `npm run verificar` para checar ambiente, planilhas e config de cada
+Para o rastreamento do WhatsApp são necessárias também `DATABASE_URL`,
+`META_ADS_TOKEN` e `CRON_SECRET` (ver a seção do WhatsApp).
+
+Rode `npm run verificar` para checar ambiente, planilhas, banco e config de cada
 cliente antes de subir.
 
-### 3. Tenants (clientes)
+### 3. Banco de leads
+
+Crie um Postgres (Neon, Supabase, Railway ou local), cole a string de conexão em
+`DATABASE_URL` e rode:
+
+```bash
+npm run migrar
+```
+
+O script aplica [`lib/schema.sql`](lib/schema.sql) e é idempotente: rodar de novo
+não altera nem apaga nada. Só é dispensável se você não vai receber leads do
+WhatsApp.
+
+### 4. Tenants (clientes)
 
 Cadastre os clientes pela tela **`/admin`** (senha em `ADMIN_SENHA`) ou à mão em
 `tenants.json` (copie de `tenants.example.json`). Cada item aponta o `slug` e a
@@ -89,10 +123,43 @@ trocar `persistir`/`carregar` em [`lib/tenants.ts`](lib/tenants.ts) por um banco
 ## Rodar
 
 ```bash
-npm run dev     # http://localhost:3000/<slug>
+npm run dev       # http://localhost:3000/<slug>
 npm run build
 npm start
+
+npm run verificar # diagnóstico: ambiente, planilhas, banco
+npm run migrar    # cria/atualiza as tabelas
+npm run testar    # testes do rastreamento (não precisa de banco nem de rede)
 ```
+
+`npm run testar` roda dois conjuntos: a leitura do `referral` e o motor de
+atribuição (sem I/O), e a gravação contra um Postgres real em memória (PGlite),
+que é onde a idempotência é de fato verificada.
+
+### Ver funcionando localmente, sem conta na Meta
+
+Três terminais:
+
+```bash
+npm run banco:local   # Postgres em WASM numa porta TCP (guarda em ./.pglite)
+npm run dev
+npm run demo          # manda webhooks assinados e mostra o banco a cada passo
+```
+
+O `npm run demo` encena os testes de aceitação do §44: lead de anúncio com
+`ad_id` e `ctwa_clid`, reenvio do mesmo evento (que não duplica), segunda
+mensagem do mesmo contato, lead orgânico, e a tabela final do §2 com campanha,
+conjunto e anúncio.
+
+Não é simulação de fachada: são requisições HTTP de verdade em `/api/whatsapp`,
+assinadas com `X-Hub-Signature-256` como a Meta assina, atendidas pelo Next,
+gravadas pelo driver `pg` com o SQL de produção. O que é fingido, e está marcado
+na saída, são só as duas credenciais que não existem localmente — o token de
+anúncios (o nome da campanha é escrito direto, no passo 6) e o Google Sheets (o
+espelho falha, e a demo mostra que o lead sobrevive a isso).
+
+`npm run banco:local` serve para demonstração e desenvolvimento. Em produção, um
+Postgres de verdade: isso é single-connection multiplexada e não aguenta carga.
 
 ## Webhooks
 
@@ -147,17 +214,50 @@ O `Lead ID`, `Origem` (Facebook/Instagram) e `Campanha` já vêm preenchidos —
 ## Leads do WhatsApp (anúncios Click-to-WhatsApp)
 
 Quando alguém clica num anúncio "Enviar mensagem" e manda a 1ª mensagem, o
-WhatsApp anexa um bloco `referral` com o anúncio de origem e um `ctwa_clid`
-(id do clique). O painel recebe isso em `/api/whatsapp`, descobre de qual
-cliente é o número e grava o lead na planilha dele.
+WhatsApp anexa um bloco `referral` com o anúncio de origem e um `ctwa_clid` (id
+do clique). O painel recebe isso em `/api/whatsapp`, descobre de qual cliente é
+o número, e transforma aquele evento num lead individual **com o anúncio, o
+conjunto e a campanha de origem**.
 
-Cada mensagem **não** vira um lead novo: se o telefone já está na planilha, a
-gravação é ignorada. Isso depende de existir uma coluna de telefone reconhecível
-(`Telefone`, `WhatsApp`, `Celular`, `Phone`...) — o `npm run verificar` avisa.
+O caminho completo:
 
-Configuração:
+```
+mensagem chega
+      ↓
+/api/whatsapp responde 200 na hora      (o Meta não fica reenviando)
+      ↓  after()
+grava lead + mensagem + evento de atribuição   (uma transação)
+      ↓
+referral.source_id  ->  ad_id
+      ↓
+Graph API: ad_id -> campanha / conjunto / anúncio
+      ↓
+banco  +  linha na planilha do cliente
+```
 
-1. No `.env.local`: `META_APP_SECRET`, `META_WHATSAPP_VERIFY_TOKEN`.
+**O lead é gravado antes da consulta à Meta, não depois.** Se a Graph API
+estiver fora, o lead entra com telefone e primeira mensagem, e os nomes de
+campanha chegam no job de sincronização. Nenhum lead é perdido porque a API de
+outra empresa caiu.
+
+### O que é capturado
+
+| Vem do webhook | Vem da Graph API |
+|---|---|
+| telefone, nome do perfil, texto da 1ª mensagem | `campaign_id`, `campaign_name` |
+| `message.id`, timestamp, tipo | `adset_id`, `adset_name` |
+| `waba_id`, `phone_number_id`, número comercial | `ad_name` |
+| `referral` inteiro: `source_id`, `source_type`, `source_url`, `headline`, `body`, mídia | |
+| `ctwa_clid` | |
+
+O `referral` aparece **só na primeira mensagem**. Por isso ele é gravado bruto
+em `messages.raw_payload`: se o Meta acrescentar um campo amanhã, o dado dos
+leads de hoje não está perdido.
+
+### Configuração
+
+1. No `.env.local`: `DATABASE_URL` (e rode `npm run migrar`), `META_APP_SECRET`,
+   `META_WHATSAPP_VERIFY_TOKEN`, `META_ADS_TOKEN` e `CRON_SECRET`.
    **Em produção, sem o app secret o webhook é recusado (503)** — ele é o que
    impede terceiros de gravar leads falsos na planilha do cliente.
 2. No app do Meta (developers.facebook.com), produto **WhatsApp** → Configuração:
@@ -165,12 +265,73 @@ Configuração:
    - **Token de verificação**: o mesmo valor de `META_WHATSAPP_VERIFY_TOKEN`
    - Assine o campo **messages**.
 3. Na tela `/admin`, no cliente, preencha **WhatsApp — Phone Number ID** (o ID
-   do número na Cloud API, não o número em si). É ele que roteia o lead para a
-   planilha certa; dois clientes não podem ter o mesmo.
+   do número na Cloud API, não o número em si). É ele que roteia o lead para o
+   cliente certo; dois clientes não podem ter o mesmo.
+4. Para os nomes de campanha, o cliente precisa de uma conta de anúncios
+   alcançável por um token com `ads_read` — o mesmo `META_ADS_TOKEN` da agência
+   já serve (ver "Conectar a conta de anúncios" abaixo).
 
-Colunas gravadas: `Nome`, `Telefone`, `Origem` (`WhatsApp` ou
-`WhatsApp (anúncio)`), `Campanha`, `Primeira mensagem` e `ctwa_clid` — criadas
-sozinhas se não existirem.
+Colunas gravadas na planilha: `Nome`, `Telefone`, `Origem` (`WhatsApp` ou
+`WhatsApp (anúncio)`), `Primeira mensagem`, `ctwa_clid` e, quando a Graph API
+responde, `Campanha`, `Conjunto` e `Anúncio` — criadas sozinhas se não existirem.
+
+> **Nota sobre a versão anterior:** a coluna `Campanha` era preenchida com
+> `referral.headline`. Headline é o título do criativo, não o nome da campanha —
+> quem olhasse a tabela de campanhas via texto de anúncio no lugar de campanha.
+> Agora `Campanha` fica vazia até a Graph API responder com o nome verdadeiro.
+
+### O banco (e por que ele é necessário)
+
+O painel continua lendo a planilha, e todo lead do WhatsApp continua ganhando a
+linha dele lá. O Postgres existe para o que a planilha não consegue guardar:
+
+| Tabela | Para quê |
+|---|---|
+| `clients` | espelho do cadastro, para amarrar tudo por `client_id` |
+| `whatsapp_accounts` | WABA + `phone_number_id` + número, com token cifrado |
+| `leads` | o lead com os 10 campos de atribuição |
+| `messages` | **cada** mensagem, com o payload original |
+| `attribution_events` | histórico de atribuição, inclusive quando o contato volta por outro anúncio |
+
+A razão principal é a **idempotência**: o Meta reenvia webhooks, e sem uma
+restrição única de verdade o mesmo evento vira dois leads. `messages`
+`.whatsapp_message_id` é `UNIQUE`, e lead + mensagem + atribuição são gravados
+numa transação só — se o `INSERT` da mensagem não pega, nada foi tocado. Isso é
+testado de verdade em `npm run testar`, contra um Postgres real.
+
+Sem `DATABASE_URL` o webhook ainda funciona, gravando direto na planilha como
+antes — mas sem histórico de mensagens, sem campanha/conjunto/anúncio e sem
+garantia contra evento duplicado. É modo de compatibilidade, não o modo normal.
+
+### Job de sincronização da atribuição
+
+O que ficou pendente porque a Graph API falhou é refeito por:
+
+```
+GET /api/jobs/atribuicao
+Authorization: Bearer $CRON_SECRET
+```
+
+Ele também conserta o caso inverso: lead que entrou no banco mas cuja linha na
+planilha falhou. Desiste de um anúncio depois de 5 tentativas, para não bater
+eternamente num anúncio apagado.
+
+Na Vercel, em `vercel.json` (o plano Hobby só aceita uma execução por dia; para
+15 minutos é preciso um plano pago ou um cron externo apontando para a mesma URL):
+
+```json
+{ "crons": [{ "path": "/api/jobs/atribuicao", "schedule": "*/15 * * * *" }] }
+```
+
+Sem `CRON_SECRET` o endpoint responde 503 — ele gasta cota da Graph API e
+escreve na planilha do cliente, então ficar aberto não é opção.
+
+### Conversation ID
+
+A tabela `leads` tem a coluna `conversation_id` que a spec pede, e ela fica
+nula. A Cloud API não expõe id de conversa no evento de mensagem recebida: esse
+campo só aparece em `statuses` (entrega/cobrança) das mensagens que a empresa
+**envia**, e este produto só recebe. A coluna está lá para quando houver envio.
 
 ## Colunas opcionais da planilha
 
@@ -297,6 +458,10 @@ A planilha guarda o *estado atual* de cada lead, não o histórico. Por isso o
 dashboard responde "quantos estão qualificados", mas não "quanto tempo levou
 para qualificar" — isso exigiria registrar cada mudança de status.
 
+O histórico de **mensagens** do WhatsApp, esse sim, está guardado (tabela
+`messages`), mas o dashboard ainda não o usa: os números atuais continuam saindo
+da planilha. Ligar o painel no banco é o passo da Fase 3.
+
 ## Conversões de volta para Meta e Google
 
 Quando o cliente muda o status de um lead no painel, a ferramenta envia a
@@ -346,3 +511,63 @@ Erros de envio não derrubam o salvamento — ficam registrados na coluna Conver
   sessão por cookie em vez de senha em toda chamada, e isolamento por cliente (tenant).
 - Limite herdado do original: lê a planilha inteira a cada request (ok até alguns milhares
   de linhas). Para escalar além disso, seria o passo de trocar o banco.
+
+## O que o painel mostra do rastreamento
+
+O painel lê as duas fontes e costura uma lista só
+([`lib/leadsPainel.ts`](lib/leadsPainel.ts)): a planilha manda no que o cliente
+edita (etapa, anotação, valor, respostas), o banco manda na atribuição. Onde as
+duas se sobrepõem — campanha, conjunto, anúncio — o banco ganha, porque é dele o
+nome que a Graph API confirmou.
+
+**No detalhe do lead** (aba Leads → clicar num lead):
+
+- **Origem do lead**: campanha, conjunto e anúncio, sempre os três, com selo de
+  atribuição (`De anúncio` / `Anúncio não identificado` / `Orgânico`) e o
+  `ctwa_clid`. Os três aparecem mesmo vazios — é a ausência que informa.
+- **Conversa no WhatsApp**: o histórico completo, mensagem por mensagem, com
+  hora. Vem da tabela `messages`, não da planilha.
+
+**No Dashboard**, os cinco cards do §25 — total, WhatsApp, formulário, anúncios,
+orgânicos — e o bloco de conferência do §34, que aparece quando há dado da Meta
+para comparar: conversas que a Meta reporta × contatos que o painel identificou ×
+a diferença, sem forçar os dois a coincidir.
+
+**Na aba Leads**, filtros de campanha, conjunto, anúncio e etapa (§25). Conjunto
+e anúncio acompanham a campanha escolhida, para não oferecer filtro que devolve
+zero. Clicar no número de leads de um anúncio na tabela do dashboard abre a lista
+daquele anúncio (§27).
+
+**Exportar CSV** no topo (§28), com as colunas da especificação, inclusive
+`ctwa_clid`. Sai a lista completa, e o rótulo do botão muda para "Exportar tudo"
+quando há filtro ativo, para ninguém abrir o arquivo achando que veio o recorte.
+
+### Lead que ainda não tem linha na planilha
+
+Etapa e anotação são gravadas na planilha. Um lead que está no banco mas não tem
+linha lá — porque a Sheets API falhou naquele momento, ou porque o cliente não
+tem planilha configurada — **aparece no painel em modo leitura**, com o motivo
+escrito no detalhe. Ficar invisível seria o pior resultado possível: o lead
+entrou, foi cobrado no anúncio, e ninguém o atende. O job de sincronização cria a
+linha e o lead passa a ser editável.
+
+## O que está pronto e o que falta (contra a especificação)
+
+Entregue: captura completa do WhatsApp (§8–§16), motor de atribuição com os
+quatro níveis (§17), banco relacional (§19), payload bruto guardado (§21),
+idempotência (§22–§24), painel com atribuição, histórico e filtros (§25),
+visão por campanha e anúncio (§26, §27), exportação CSV (§28), divergência
+Meta × sistema (§34), status de atribuição (§35), logs (§36), retry (§37),
+processamento fora do request (§38), isolamento por cliente (§43).
+
+Ainda não:
+
+| Pendente | Por quê / o que falta |
+|---|---|
+| Embedded Signup (§6, §40) | depende de App Review com Advanced Access em `business_management` e `whatsapp_business_management`. O modelo (`whatsapp_accounts`, token cifrado) já está no lugar; hoje o `phone_number_id` é cadastrado à mão no `/admin`. |
+| Coexistence (§7, §45, §46) | mesmo bloqueio acima. |
+| Unificação de leads entre Lead Ads e WhatsApp (§30) | a tabela `leads` já é comum aos dois, mas não há a tabela `lead_sources` nem a tela que mostra o contato com as duas origens. |
+| Etapa e anotação no banco | moram só na planilha. É o que torna o lead sem linha somente-leitura, e o que faria a planilha virar opcional de verdade. |
+| Fila externa (§38) | usamos `after()` do Next, que resolve "não processar dentro do request". Não é fila durável: se o processo morrer no meio, aquele evento é perdido — o Meta reenvia, e a idempotência garante que o reenvio não duplique, mas um evento sem reenvio ficaria de fora. Para durabilidade real, uma fila de verdade. |
+| Lead Ads no banco (§29) | o webhook `/api/meta` continua gravando só na planilha. O `source = 'meta_lead_ads'` já existe no schema. |
+| CRM e Conversions API (§31, Fases 4 e 5) | o envio de conversão já existe em [`lib/conversoes.ts`](lib/conversoes.ts); falta o resto do CRM. |

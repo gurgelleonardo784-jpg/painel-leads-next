@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import type { Lead } from "@/lib/types";
+import type { Lead, MensagemLead } from "@/lib/types";
 import { tipoDoLead } from "@/lib/types";
 import {
   fmtTelefone,
@@ -9,6 +9,9 @@ import {
   estiloAvatar,
   tempoRelativo,
   corDoStatus,
+  rotuloAtribuicao,
+  corAtribuicao,
+  horaCurta,
   ROTULO_TIPO,
   COR_TIPO,
 } from "@/lib/apresentacao";
@@ -25,12 +28,14 @@ import { Fechar, Telefone, Envelope, Whatsapp } from "../Icones";
  */
 export default function Drawer({
   lead,
+  slug,
   statusList,
   onFechar,
   onStatus,
   onNota,
 }: {
   lead: Lead;
+  slug: string;
   statusList: string[];
   onFechar: () => void;
   onStatus: (status: string) => void;
@@ -39,6 +44,50 @@ export default function Drawer({
   const [nota, setNota] = useState(lead.nota);
   const [salvo, setSalvo] = useState("");
   const painel = useRef<HTMLDivElement | null>(null);
+
+  const atrib = lead.atribuicao;
+  const temConversa = !!atrib && atrib.mensagens > 0;
+
+  /**
+   * Histórico da conversa. O resultado guarda de qual telefone ele é, então
+   * trocar de lead com o painel aberto já conta como "ainda carregando" sem
+   * precisar limpar o estado — limpar dentro do efeito dispara render em
+   * cascata, e o React reclama com razão.
+   */
+  const [conversa, setConversa] = useState<{
+    para: string;
+    mensagens: MensagemLead[];
+    erro: string;
+  } | null>(null);
+
+  const carregandoConversa = temConversa && conversa?.para !== lead.telefone;
+
+  useEffect(() => {
+    if (!temConversa || !lead.telefone) return;
+    let vivo = true;
+    (async () => {
+      const falha = (erro: string) =>
+        vivo && setConversa({ para: lead.telefone, mensagens: [], erro });
+      try {
+        const res = await fetch(
+          `/api/leads/mensagens?slug=${encodeURIComponent(slug)}&telefone=${encodeURIComponent(lead.telefone)}`,
+          { cache: "no-store" }
+        );
+        const data = await res.json().catch(() => null);
+        if (!vivo) return;
+        if (!res.ok || !data?.ok) {
+          falha("Não consegui carregar a conversa.");
+          return;
+        }
+        setConversa({ para: lead.telefone, mensagens: data.mensagens || [], erro: "" });
+      } catch {
+        falha("Não consegui carregar a conversa.");
+      }
+    })();
+    return () => {
+      vivo = false;
+    };
+  }, [slug, lead.telefone, temConversa]);
 
   const tipo = tipoDoLead(lead);
   const tel = fmtTelefone(lead.telefone);
@@ -159,14 +208,61 @@ export default function Drawer({
             )}
           </section>
 
-          {/* origem */}
-          {(lead.campanha || lead.utm) && (
-            <section className="caixa caixa-sutil">
-              <span className="secao-titulo">Campanha de origem</span>
-              <span style={{ fontSize: 13, fontWeight: 500 }}>{lead.campanha || "—"}</span>
+          {/* origem publicitária: campanha, conjunto e anúncio (§25) */}
+          {(lead.campanha || lead.conjunto || lead.anuncio || lead.utm || atrib) && (
+            <section className="caixa caixa-sutil" style={{ gap: 10 }}>
+              <div className="secao-cab">
+                <span className="secao-titulo">Origem do lead</span>
+                {atrib && (
+                  <span
+                    className="badge"
+                    style={{
+                      color: corAtribuicao(atrib.status),
+                      background: `color-mix(in srgb, ${corAtribuicao(atrib.status)} 10%, transparent)`,
+                      borderColor: `color-mix(in srgb, ${corAtribuicao(atrib.status)} 24%, transparent)`,
+                    }}
+                  >
+                    {rotuloAtribuicao(atrib.status)}
+                  </span>
+                )}
+              </div>
+
+              <div className="atrib-grade">
+                {[
+                  { rotulo: "Campanha", valor: lead.campanha },
+                  { rotulo: "Conjunto", valor: lead.conjunto },
+                  { rotulo: "Anúncio", valor: lead.anuncio },
+                ].map((linha) => (
+                  <div className="atrib-linha" key={linha.rotulo}>
+                    <span className="atrib-rotulo">{linha.rotulo}</span>
+                    <span className={`atrib-valor${linha.valor ? "" : " vazio"}`}>
+                      {linha.valor || "—"}
+                    </span>
+                  </div>
+                ))}
+              </div>
+
+              {/* o caso que mais gera dúvida: veio de anúncio, mas qual? */}
+              {atrib?.status === "pending" && (
+                <p className="secao-meta" style={{ lineHeight: 1.5 }}>
+                  A Meta confirmou que este contato veio de um anúncio, mas o nome da campanha
+                  ainda não chegou. A sincronização tenta de novo sozinha.
+                </p>
+              )}
+              {atrib?.status === "organic" && (
+                <p className="secao-meta" style={{ lineHeight: 1.5 }}>
+                  Chegou sem passar por anúncio — não há campanha a atribuir.
+                </p>
+              )}
+
               {lead.utm && (
                 <span className="num" style={{ fontSize: 11, color: "var(--txt6)" }}>
                   {lead.utm}
+                </span>
+              )}
+              {atrib?.ctwaClid && (
+                <span className="num" style={{ fontSize: 10.5, color: "var(--txt6)" }}>
+                  ctwa_clid {atrib.ctwaClid}
                 </span>
               )}
             </section>
@@ -182,7 +278,21 @@ export default function Drawer({
           {/* etapa */}
           <section className="drawer-secao">
             <span className="secao-titulo">Etapa do lead</span>
-            <div className="etapas-escolha">
+            {lead.somenteLeitura && (
+              <div className="caixa-aviso">
+                <div style={{ fontSize: 13, fontWeight: 600, color: "var(--alerta)" }}>
+                  Este lead ainda não tem linha na planilha
+                </div>
+                <div
+                  style={{ fontSize: 12.5, color: "var(--txt3)", lineHeight: 1.5, marginTop: 6 }}
+                >
+                  Ele foi capturado do WhatsApp e está guardado com telefone, conversa e origem —
+                  mas etapa e anotação são gravadas na planilha, e a linha dele não existe lá.
+                  Configure a planilha do cliente, ou rode a sincronização para criá-la.
+                </div>
+              </div>
+            )}
+            <div className="etapas-escolha" aria-disabled={lead.somenteLeitura || undefined}>
               {statusList.map((s) => {
                 const c = corDoStatus(s, statusList);
                 const ativo = s === lead.status;
@@ -191,6 +301,7 @@ export default function Drawer({
                     key={s}
                     className="etapa-btn"
                     aria-pressed={ativo}
+                    disabled={lead.somenteLeitura}
                     onClick={() => onStatus(s)}
                     style={
                       ativo
@@ -254,7 +365,9 @@ export default function Drawer({
                   </div>
                 </div>
 
-                {lead.primeiraMensagem && (
+                {/* com o histórico completo abaixo, repetir a 1ª mensagem aqui só
+                    duplicaria; sem banco, ela é tudo o que existe */}
+                {lead.primeiraMensagem && !temConversa && (
                   <div className="caixa">
                     <span className="secao-titulo" style={{ color: "var(--sucesso-txt)" }}>
                       Primeira mensagem no WhatsApp
@@ -266,6 +379,53 @@ export default function Drawer({
             )}
           </section>
 
+          {/* histórico de mensagens (§25) — o que a planilha não guarda */}
+          {temConversa && (
+            <section className="drawer-secao">
+              <div className="secao-cab">
+                <span className="secao-titulo">Conversa no WhatsApp</span>
+                <span className="secao-meta">
+                  {atrib!.mensagens} mensagem{atrib!.mensagens === 1 ? "" : "s"}
+                  {atrib!.primeiraMensagemEm ? ` · desde ${horaCurta(atrib!.primeiraMensagemEm)}` : ""}
+                </span>
+              </div>
+
+              {carregandoConversa ? (
+                <p className="secao-meta">Carregando a conversa…</p>
+              ) : conversa?.erro ? (
+                <p className="secao-meta">{conversa.erro}</p>
+              ) : !conversa?.mensagens.length ? (
+                <p className="secao-meta">Nenhuma mensagem registrada.</p>
+              ) : (
+                <div className="conversa">
+                  {conversa.mensagens.map((m, i) => (
+                    <div className={`msg${m.direcao === "out" ? " msg-saida" : ""}`} key={m.id || i}>
+                      <div className="msg-cab">
+                        <span>{i === 0 ? "1ª mensagem" : m.direcao === "out" ? "Enviada" : "Recebida"}</span>
+                        <span className="num">{horaCurta(m.em)}</span>
+                      </div>
+                      {m.texto ? (
+                        <span className="msg-texto">{m.texto}</span>
+                      ) : (
+                        <span className="msg-texto vazio">
+                          {m.tipo === "image"
+                            ? "(imagem)"
+                            : m.tipo === "audio"
+                              ? "(áudio)"
+                              : m.tipo === "video"
+                                ? "(vídeo)"
+                                : m.tipo === "document"
+                                  ? "(documento)"
+                                  : `(${m.tipo})`}
+                        </span>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              )}
+            </section>
+          )}
+
           {/* anotações */}
           <section className="drawer-secao">
             <div className="secao-cab">
@@ -274,20 +434,27 @@ export default function Drawer({
             </div>
             <textarea
               value={nota}
-              placeholder="Escreva o que ficou combinado com este lead…"
+              disabled={lead.somenteLeitura}
+              placeholder={
+                lead.somenteLeitura
+                  ? "Sem linha na planilha, não há onde gravar a anotação."
+                  : "Escreva o que ficou combinado com este lead…"
+              }
               onChange={(e) => {
                 setNota(e.target.value);
                 setSalvo("");
               }}
               onBlur={salvarNota}
             />
-            <button
-              className="btn"
-              style={{ alignSelf: "flex-start", height: 34 }}
-              onClick={salvarNota}
-            >
-              Salvar anotação
-            </button>
+            {!lead.somenteLeitura && (
+              <button
+                className="btn"
+                style={{ alignSelf: "flex-start", height: 34 }}
+                onClick={salvarNota}
+              >
+                Salvar anotação
+              </button>
+            )}
           </section>
 
           {/* histórico: só o que a planilha realmente sabe */}
@@ -319,8 +486,9 @@ export default function Drawer({
               </div>
             </div>
             <p className="secao-meta" style={{ lineHeight: 1.5 }}>
-              A planilha guarda o estado atual do lead, não o histórico de mudanças — por isso
-              esta linha do tempo mostra só o começo e o agora.
+              {temConversa
+                ? "Cada mudança de etapa não fica registrada — por isso esta linha do tempo mostra só o começo e o agora. A conversa acima, sim, está guardada mensagem por mensagem."
+                : "A planilha guarda o estado atual do lead, não o histórico de mudanças — por isso esta linha do tempo mostra só o começo e o agora."}
             </p>
           </section>
         </div>

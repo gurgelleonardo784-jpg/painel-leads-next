@@ -12,7 +12,7 @@ import Drawer from "./leads/Drawer";
 import NovoLead from "./leads/NovoLead";
 import Dashboard from "./Dashboard";
 import TemaBotao from "./TemaBotao";
-import { Atualizar, Mais, Lupa } from "./Icones";
+import { Atualizar, Mais, Lupa, Baixar } from "./Icones";
 
 export type SalvarCampos = { status?: string; nota?: string };
 
@@ -43,6 +43,11 @@ export default function Painel({ tenant }: { tenant: TenantPublico }) {
   const [fOrigem, setFOrigem] = useState("");
   const [fPeriodo, setFPeriodo] = useState("");
   const [fTipo, setFTipo] = useState("");
+  // filtros de atribuição e etapa do §25
+  const [fCampanha, setFCampanha] = useState("");
+  const [fConjunto, setFConjunto] = useState("");
+  const [fAnuncio, setFAnuncio] = useState("");
+  const [fStatus, setFStatus] = useState("");
 
   const [selecionado, setSelecionado] = useState<string | null>(null);
   const [criando, setCriando] = useState(false);
@@ -128,6 +133,14 @@ export default function Painel({ tenant }: { tenant: TenantPublico }) {
 
   const salvar = useCallback(
     async (id: string, campos: SalvarCampos): Promise<boolean> => {
+      // lead que só existe no banco: não há linha na planilha onde gravar.
+      // Melhor dizer isso do que deixar a mudança aparecer na tela e sumir na
+      // próxima atualização.
+      if (id.startsWith("db:")) {
+        toast("Este lead ainda não tem linha na planilha — a etapa não pode ser salva.");
+        return false;
+      }
+
       setLeads((atual) =>
         atual.map((l) =>
           l.id === id
@@ -173,12 +186,47 @@ export default function Painel({ tenant }: { tenant: TenantPublico }) {
     return set;
   }, [leads]);
 
+  /** Valores distintos de um campo, para montar as listas de filtro. */
+  const distintos = useCallback(
+    (pega: (l: Lead) => string) => {
+      const set = new Set<string>();
+      leads.forEach((l) => {
+        const v = pega(l).trim();
+        if (v) set.add(v);
+      });
+      return [...set].sort((a, b) => a.localeCompare(b, "pt-BR"));
+    },
+    [leads]
+  );
+
+  const campanhas = useMemo(() => distintos((l) => l.campanha), [distintos]);
+  // conjunto e anúncio acompanham a campanha escolhida: oferecer o conjunto de
+  // outra campanha na lista só produz filtro que devolve zero
+  const conjuntos = useMemo(
+    () =>
+      distintos((l) => (!fCampanha || l.campanha === fCampanha ? l.conjunto : "")),
+    [distintos, fCampanha]
+  );
+  const anuncios = useMemo(
+    () =>
+      distintos((l) =>
+        (!fCampanha || l.campanha === fCampanha) && (!fConjunto || l.conjunto === fConjunto)
+          ? l.anuncio
+          : ""
+      ),
+    [distintos, fCampanha, fConjunto]
+  );
+
   const filtrados = useMemo(() => {
     const q = busca.trim().toLowerCase();
     const dias = parseInt(fPeriodo, 10);
     return leads.filter((l) => {
       if (fOrigem && l.origem !== fOrigem) return false;
       if (fTipo && tipoDoLead(l) !== (fTipo as TipoLead)) return false;
+      if (fCampanha && l.campanha !== fCampanha) return false;
+      if (fConjunto && l.conjunto !== fConjunto) return false;
+      if (fAnuncio && l.anuncio !== fAnuncio) return false;
+      if (fStatus && l.status !== fStatus) return false;
       if (dias) {
         const d = parseData(l.data);
         if (!d) return false;
@@ -190,7 +238,23 @@ export default function Painel({ tenant }: { tenant: TenantPublico }) {
       if (q && !textoBusca(l).includes(q)) return false;
       return true;
     });
-  }, [leads, busca, fPeriodo, fOrigem, fTipo]);
+  }, [leads, busca, fPeriodo, fOrigem, fTipo, fCampanha, fConjunto, fAnuncio, fStatus]);
+
+  const filtroAtivo = !!(
+    busca || fOrigem || fPeriodo || fTipo || fCampanha || fConjunto || fAnuncio || fStatus
+  );
+
+  const limparFiltros = useCallback(() => {
+    setBusca("");
+    setFOrigem("");
+    setFPeriodo("");
+    setFTipo("");
+    setFCampanha("");
+    setFConjunto("");
+    setFAnuncio("");
+    setFStatus("");
+  }, []);
+
 
   // KPIs sobre a base inteira, como manda o spec (os filtros mexem só na lista)
   const kpis = useMemo(() => {
@@ -308,6 +372,19 @@ export default function Painel({ tenant }: { tenant: TenantPublico }) {
                 <Atualizar />
                 <span className="rotulo-btn">Atualizar</span>
               </button>
+              {/* §28. Baixa a lista inteira, não a filtrada — o rótulo diz isso
+                  quando há filtro ativo, para ninguém abrir o arquivo e achar
+                  que veio lead demais. */}
+              <a
+                className="btn"
+                href={`/api/leads/export?slug=${encodeURIComponent(tenant.slug)}`}
+                title="Baixa a lista completa de leads em CSV"
+              >
+                <Baixar />
+                <span className="rotulo-btn">
+                  {filtroAtivo ? "Exportar tudo" : "Exportar CSV"}
+                </span>
+              </a>
               <button className="btn btn-primario" onClick={() => setCriando(true)}>
                 <Mais />
                 <span className="rotulo-btn">Novo lead</span>
@@ -340,7 +417,19 @@ export default function Painel({ tenant }: { tenant: TenantPublico }) {
 
       {modulo === "dashboard" ? (
         <div className="conteudo">
-          <Dashboard tenant={tenant} leads={leads} statusList={statusList} />
+          <Dashboard
+            tenant={tenant}
+            leads={leads}
+            statusList={statusList}
+            onVerAnuncio={(anuncio) => {
+              // §27: sai do dashboard já na lista daquele anúncio. Limpa os
+              // outros filtros para não somar restrições e devolver zero.
+              limparFiltros();
+              setFAnuncio(anuncio);
+              setVisao("lista");
+              setModulo("leads");
+            }}
+          />
         </div>
       ) : (
         <div className="conteudo">
@@ -400,6 +489,72 @@ export default function Painel({ tenant }: { tenant: TenantPublico }) {
                 </option>
               ))}
             </select>
+            <select value={fStatus} aria-label="Etapa" onChange={(e) => setFStatus(e.target.value)}>
+              <option value="">Todas as etapas</option>
+              {statusList.map((s) => (
+                <option key={s} value={s}>
+                  {s}
+                </option>
+              ))}
+            </select>
+
+            {/* atribuição: só aparece se houver o que filtrar (§25) */}
+            {campanhas.length > 0 && (
+              <select
+                value={fCampanha}
+                aria-label="Campanha"
+                onChange={(e) => {
+                  setFCampanha(e.target.value);
+                  // conjunto e anúncio da campanha anterior não valem mais
+                  setFConjunto("");
+                  setFAnuncio("");
+                }}
+              >
+                <option value="">Todas as campanhas</option>
+                {campanhas.map((c) => (
+                  <option key={c} value={c}>
+                    {c}
+                  </option>
+                ))}
+              </select>
+            )}
+            {conjuntos.length > 0 && (
+              <select
+                value={fConjunto}
+                aria-label="Conjunto"
+                onChange={(e) => {
+                  setFConjunto(e.target.value);
+                  setFAnuncio("");
+                }}
+              >
+                <option value="">Todos os conjuntos</option>
+                {conjuntos.map((c) => (
+                  <option key={c} value={c}>
+                    {c}
+                  </option>
+                ))}
+              </select>
+            )}
+            {anuncios.length > 0 && (
+              <select
+                value={fAnuncio}
+                aria-label="Anúncio"
+                onChange={(e) => setFAnuncio(e.target.value)}
+              >
+                <option value="">Todos os anúncios</option>
+                {anuncios.map((a) => (
+                  <option key={a} value={a}>
+                    {a}
+                  </option>
+                ))}
+              </select>
+            )}
+
+            {filtroAtivo && (
+              <button className="btn" onClick={limparFiltros}>
+                Limpar filtros
+              </button>
+            )}
 
             <span className="espaco" />
 
@@ -420,6 +575,26 @@ export default function Painel({ tenant }: { tenant: TenantPublico }) {
               </button>
             </div>
           </div>
+
+          {/* com filtro ativo, o que está na tela é um recorte — dizer qual */}
+          {filtroAtivo && filtrados.length > 0 && (
+            <div className="recorte">
+              <b>
+                {inteiro(filtrados.length)} lead{filtrados.length === 1 ? "" : "s"}
+              </b>
+              <span>
+                {[
+                  fAnuncio && `anúncio “${fAnuncio}”`,
+                  fConjunto && `conjunto “${fConjunto}”`,
+                  fCampanha && `campanha “${fCampanha}”`,
+                  fStatus && `etapa ${fStatus}`,
+                  fOrigem && `origem ${fOrigem}`,
+                ]
+                  .filter(Boolean)
+                  .join(" · ") || `de ${inteiro(leads.length)} no total`}
+              </span>
+            </div>
+          )}
 
           {leads.length === 0 ? (
             <div className="vazio">
@@ -452,6 +627,7 @@ export default function Painel({ tenant }: { tenant: TenantPublico }) {
       {leadAberto && (
         <Drawer
           lead={leadAberto}
+          slug={tenant.slug}
           statusList={statusList}
           onFechar={() => setSelecionado(null)}
           onStatus={(s) => void salvar(leadAberto.id, { status: s })}

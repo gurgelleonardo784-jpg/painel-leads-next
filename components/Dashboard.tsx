@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import type { Lead, TenantPublico } from "@/lib/types";
+import { tipoDoLead } from "@/lib/types";
 import type { InsightCampanha } from "@/lib/metaAds";
 import {
   calcular,
@@ -55,10 +56,13 @@ export default function Dashboard({
   tenant,
   leads,
   statusList,
+  onVerAnuncio,
 }: {
   tenant: TenantPublico;
   leads: Lead[];
   statusList: string[];
+  /** §27: abrir a lista de leads de um anúncio. */
+  onVerAnuncio?: (anuncio: string) => void;
 }) {
   const [dias, setDias] = useState(30);
   const [canal, setCanal] = useState("");
@@ -142,6 +146,58 @@ export default function Dashboard({
   // campanha de mensagem não gera lead na planilha; o que ela gera é conversa
   const temConversas = campanhas.some((c) => c.conversas > 0);
 
+  /**
+   * A composição da base por origem (§25).
+   *
+   * WhatsApp e formulário saem do tipo do lead. Anúncio e orgânico saem da
+   * atribuição, que só existe para quem passou pelo webhook do WhatsApp — quem
+   * não passou fica de fora dos dois, porque "não sabemos de onde veio" não é a
+   * mesma coisa que "veio sozinho". O total de fora aparece na tela em vez de
+   * ser diluído.
+   */
+  const origem = useMemo(() => {
+    const total = leads.length;
+    const whats = leads.filter((l) => tipoDoLead(l) === "whatsapp").length;
+    const form = leads.filter((l) => tipoDoLead(l) === "form").length;
+    const anuncio = leads.filter(
+      (l) => l.atribuicao?.status === "attributed" || l.atribuicao?.status === "pending"
+    ).length;
+    const organico = leads.filter((l) => l.atribuicao?.status === "organic").length;
+    const naoIdentificado = leads.filter((l) => l.atribuicao?.status === "pending").length;
+    return {
+      total,
+      whats,
+      form,
+      anuncio,
+      organico,
+      naoIdentificado,
+      semRastreio: total - anuncio - organico,
+      rastreados: anuncio + organico,
+      pct: (n: number) => (total ? Math.round((n / total) * 100) : 0),
+    };
+  }, [leads]);
+
+  /**
+   * §34: a contagem da Meta contra a nossa, sem forçar as duas a coincidir.
+   *
+   * A Meta conta conversas iniciadas por anúncio; nós contamos contatos
+   * identificados. Divergir é normal — quem clica em dois anúncios conta duas
+   * vezes lá e é um contato aqui. O que não se faz é preencher um número com o
+   * outro para a tela ficar bonita.
+   */
+  const conferencia = useMemo(() => {
+    const conversasMeta = campanhas.reduce((s, c) => s + c.conversas, 0);
+    if (conversasMeta === 0) return null;
+    const identificados = leads.filter(
+      (l) => l.atribuicao && l.atribuicao.mensagens > 0
+    ).length;
+    return {
+      conversasMeta,
+      identificados,
+      diferenca: identificados - conversasMeta,
+    };
+  }, [campanhas, leads]);
+
   // as colunas da tabela seguem o que existe: sem receita, sem coluna de receita
   const colunas = temReceita
     ? "2.4fr 1fr 0.9fr 0.8fr 1fr 0.9fr 0.8fr 1fr 0.7fr 1fr"
@@ -187,6 +243,120 @@ export default function Dashboard({
         <div className="aviso-inline aviso-atencao">
           <b>A planilha não tem coluna de data.</b> Os totais estão certos, mas sem data não dá
           para separar por período nem montar o gráfico por dia.
+        </div>
+      )}
+
+      {/* de onde vieram os leads (§25) */}
+      <div className="bloco">
+        <div className="bloco-cab">
+          <div>
+            <div className="t">De onde vieram os leads</div>
+            <div className="s">
+              {origem.rastreados > 0
+                ? `${origem.rastreados} de ${origem.total} com origem rastreada`
+                : "a origem publicitária aparece aqui quando os leads chegam pelo WhatsApp"}
+            </div>
+          </div>
+        </div>
+
+        <div className="origem-cards">
+          {[
+            { rotulo: "Total de leads", valor: origem.total, cor: "var(--txt)", pct: 100 },
+            { rotulo: "De WhatsApp", valor: origem.whats, cor: "var(--tipo-whats)", pct: origem.pct(origem.whats) },
+            { rotulo: "De formulário", valor: origem.form, cor: "var(--tipo-form)", pct: origem.pct(origem.form) },
+            { rotulo: "De anúncios", valor: origem.anuncio, cor: "var(--canal-meta)", pct: origem.pct(origem.anuncio) },
+            { rotulo: "Orgânicos", valor: origem.organico, cor: "var(--etapa-qualificado)", pct: origem.pct(origem.organico) },
+          ].map((c) => (
+            <div className="origem-card" key={c.rotulo}>
+              <span className="rotulo">{c.rotulo}</span>
+              <span className="valor" style={{ color: c.cor }}>
+                {inteiro(c.valor)}
+              </span>
+              <div className="barra">
+                <div style={{ width: `${c.pct}%`, background: c.cor }} />
+              </div>
+              <span className="sub">{c.pct}% do total</span>
+            </div>
+          ))}
+        </div>
+
+        {origem.naoIdentificado > 0 && (
+          <p className="secao-meta" style={{ padding: "0 22px 14px", lineHeight: 1.5 }}>
+            <b>{inteiro(origem.naoIdentificado)}</b> desses leads de anúncio ainda estão sem nome
+            de campanha: a Meta confirmou a origem, mas os dados do anúncio não chegaram. A
+            sincronização tenta de novo sozinha.
+          </p>
+        )}
+        {origem.semRastreio > 0 && origem.total > 0 && (
+          <p className="secao-meta" style={{ padding: "0 22px 16px", lineHeight: 1.5 }}>
+            <b>{inteiro(origem.semRastreio)}</b> leads ficam fora da conta de anúncio/orgânico —
+            são os que não passaram pelo WhatsApp (formulário, cadastro manual, importados). Não
+            dá para dizer que vieram sozinhos, então não entram como orgânicos.
+          </p>
+        )}
+      </div>
+
+      {/* §34: o número da Meta contra o nosso, sem forçar a coincidência */}
+      {conferencia && (
+        <div className="bloco">
+          <div className="bloco-cab">
+            <div>
+              <div className="t">Conversas da Meta × contatos identificados</div>
+              <div className="s">
+                A Meta conta conversas iniciadas; o painel conta pessoas. Os dois números não
+                precisam bater.
+              </div>
+            </div>
+          </div>
+          <div className="conferencia">
+            <div className="conf-item">
+              <span className="rotulo">A Meta reporta</span>
+              <span className="valor">{inteiro(conferencia.conversasMeta)}</span>
+              <span className="sub">conversas iniciadas por anúncio</span>
+            </div>
+            <span className="conf-sinal" aria-hidden="true">
+              ×
+            </span>
+            <div className="conf-item">
+              <span className="rotulo">O painel identificou</span>
+              <span className="valor" style={{ color: "var(--tipo-whats)" }}>
+                {inteiro(conferencia.identificados)}
+              </span>
+              <span className="sub">contatos com telefone e conversa</span>
+            </div>
+            <span className="conf-sinal" aria-hidden="true">
+              =
+            </span>
+            <div className="conf-item">
+              <span className="rotulo">Diferença</span>
+              <span
+                className="valor"
+                style={{
+                  color:
+                    conferencia.diferenca === 0
+                      ? "var(--sucesso-txt)"
+                      : conferencia.diferenca < 0
+                        ? "var(--alerta)"
+                        : "var(--txt)",
+                }}
+              >
+                {conferencia.diferenca > 0 ? "+" : ""}
+                {inteiro(conferencia.diferenca)}
+              </span>
+              <span className="sub">
+                {conferencia.diferenca === 0
+                  ? "os dois números coincidem"
+                  : conferencia.diferenca < 0
+                    ? "conversas que não viraram contato aqui"
+                    : "contatos além do que a Meta contou"}
+              </span>
+            </div>
+          </div>
+          <p className="secao-meta" style={{ padding: "0 22px 16px", lineHeight: 1.5 }}>
+            Diferença negativa é o normal: quem clica em dois anúncios conta duas vezes na Meta e
+            é um contato aqui, e conversa iniciada sem mensagem enviada não gera evento. Se a
+            diferença for grande, vale conferir se todos os números do cliente estão conectados.
+          </p>
         </div>
       )}
 
@@ -443,7 +613,11 @@ export default function Dashboard({
                 Quantas conversas cada criativo abriu e quantas foram adiante
               </div>
             </div>
-            <span className="secao-meta">Fonte: Meta · contato individual exige Cloud API</span>
+            <span className="secao-meta">
+              {origem.anuncio > 0
+                ? "Fonte: Meta · o contato individual está no painel"
+                : "Fonte: Meta · contato individual exige o número na Cloud API"}
+            </span>
           </div>
 
           <div className="tabela-rolagem rolagem">
@@ -510,8 +684,10 @@ export default function Dashboard({
 
           <p className="secao-meta" style={{ padding: "12px 22px 16px", lineHeight: 1.5 }}>
             <b>Custo/engajada</b> é o número que mais se aproxima de custo por lead nessas
-            campanhas: quem trocou 3 mensagens ou mais não foi curioso de passagem. O telefone
-            dessas pessoas só chega ao painel com o número na WhatsApp Cloud API.
+            campanhas: quem trocou 3 mensagens ou mais não foi curioso de passagem.{" "}
+            {origem.anuncio > 0
+              ? "O telefone dessas pessoas está na aba Leads, uma por uma."
+              : "O telefone dessas pessoas chega ao painel quando o número entra na WhatsApp Cloud API."}
           </p>
         </div>
       )}
@@ -534,9 +710,11 @@ export default function Dashboard({
           {m.comAnuncio === 0 && (
             <div style={{ padding: "0 22px 14px" }}>
               <p className="aviso-inline aviso-atencao">
-                <b>A planilha não tem coluna de anúncio.</b> Sem ela dá para ver o que a Meta
-                reporta, mas não dá para conferir contra o que chegou. Acrescente uma coluna{" "}
-                <b>Anúncio</b> (e <b>Conjunto</b>) na planilha — a integração nativa do Meta já
+                <b>Nenhum lead tem anúncio de origem.</b> Sem isso dá para ver o que a Meta
+                reporta, mas não dá para conferir contra o que chegou. Para leads de WhatsApp, o
+                anúncio é preenchido sozinho — se não está, falta o token com{" "}
+                <b>ads_read</b> na conta de anúncios. Para leads de formulário, acrescente as
+                colunas <b>Anúncio</b> e <b>Conjunto</b> na planilha; a integração nativa do Meta
                 preenche as duas.
               </p>
             </div>
@@ -575,7 +753,18 @@ export default function Dashboard({
                     {a.investimento > 0 ? moeda(a.investimento, cod) : "—"}
                   </span>
                   <span className="num">{a.leadsMeta > 0 ? inteiro(a.leadsMeta) : "—"}</span>
-                  <span className="num forte">{inteiro(a.leadsPlanilha)}</span>
+                  {/* §27: o número de leads é o caminho para a lista deles */}
+                  {onVerAnuncio && a.leadsPlanilha > 0 ? (
+                    <button
+                      className="num forte link-num"
+                      onClick={() => onVerAnuncio(a.anuncio)}
+                      title={`Ver os ${a.leadsPlanilha} leads de "${a.anuncio}"`}
+                    >
+                      {inteiro(a.leadsPlanilha)}
+                    </button>
+                  ) : (
+                    <span className="num forte">{inteiro(a.leadsPlanilha)}</span>
+                  )}
                   <Diferenca valor={a.divergencia} />
                   <span className="num">{a.cpl === null ? "—" : moeda(a.cpl, cod)}</span>
                   <span style={{ fontSize: 12, color: "var(--etapa-qualificado)" }}>

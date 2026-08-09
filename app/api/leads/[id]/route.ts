@@ -25,6 +25,20 @@ export async function PATCH(req: Request, ctx: { params: Promise<{ id: string }>
   const tenant = await tenantDaSessao(body.slug || "");
   if (!tenant) return NextResponse.json({ ok: false, erro: "sessao" }, { status: 401 });
 
+  // lead que só existe no banco (prefixo "db:"): etapa e anotação moram na
+  // planilha, então não há linha onde gravar. Recusa com o motivo, em vez de
+  // deixar o salvarLead responder um genérico "lead não encontrado".
+  if (id.startsWith("db:")) {
+    return NextResponse.json(
+      {
+        ok: false,
+        erro:
+          "Este lead ainda não tem linha na planilha, então a etapa não pode ser salva. Configure a planilha do cliente ou rode a sincronização.",
+      },
+      { status: 409 }
+    );
+  }
+
   const campos: SalvarCampos = {};
   if (typeof body.status !== "undefined") campos.status = String(body.status);
   if (typeof body.nota !== "undefined") campos.nota = String(body.nota);

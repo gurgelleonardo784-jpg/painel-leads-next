@@ -126,6 +126,51 @@ export const COR_TIPO: Record<TipoLead, string> = {
   contato: "var(--tipo-contato)",
 };
 
+/* ---------- atribuição publicitária (§35) ---------- */
+
+/**
+ * Como cada status de atribuição se apresenta.
+ *
+ * "pending" é o caso que mais confunde e por isso tem nome próprio na tela: o
+ * lead veio de anúncio (a Meta confirmou), mas o nome da campanha ainda não
+ * chegou. Chamar isso de "orgânico" seria mentir, e deixar em branco pareceria
+ * bug.
+ */
+export const ROTULO_ATRIBUICAO: Record<string, string> = {
+  attributed: "De anúncio",
+  pending: "Anúncio não identificado",
+  organic: "Orgânico",
+  unknown: "Origem indefinida",
+};
+
+export const COR_ATRIBUICAO: Record<string, string> = {
+  attributed: "var(--canal-meta)",
+  pending: "var(--alerta)",
+  organic: "var(--tipo-whats)",
+  unknown: "var(--txt5)",
+};
+
+export function rotuloAtribuicao(status: string): string {
+  return ROTULO_ATRIBUICAO[status] || "Origem indefinida";
+}
+
+export function corAtribuicao(status: string): string {
+  return COR_ATRIBUICAO[status] || "var(--txt5)";
+}
+
+/** "08/08 10:31" a partir de um ISO. Vazio se não der para ler. */
+export function horaCurta(iso: string): string {
+  if (!iso) return "";
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return "";
+  return new Intl.DateTimeFormat("pt-BR", {
+    day: "2-digit",
+    month: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+  }).format(d);
+}
+
 /* ---------- temperatura ---------- */
 
 export function corTemperatura(t: string): string | null {

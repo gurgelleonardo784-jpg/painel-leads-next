@@ -3,6 +3,41 @@
 export type Resposta = { pergunta: string; resposta: string };
 
 /**
+ * A atribuição publicitária de um lead, vinda do banco de rastreamento.
+ *
+ * Nula quando aquele contato não passou pelo webhook do WhatsApp — lead de
+ * formulário, cadastro manual, ou telefone que só existe na planilha. Nulo aqui
+ * significa "não sabemos", nunca "orgânico": orgânico é uma conclusão, e vem
+ * como `status: "organic"`.
+ */
+export type AtribuicaoLead = {
+  /** attributed | organic | pending | unknown (§35) */
+  status: string;
+  /** meta_ads | organic | unknown */
+  fonte: string;
+  metodo: string;
+  confianca: string;
+  adId: string;
+  ctwaClid: string;
+  campanha: string;
+  conjunto: string;
+  anuncio: string;
+  primeiraMensagemEm: string;
+  ultimaMensagemEm: string;
+  /** quantas mensagens este contato já mandou */
+  mensagens: number;
+};
+
+/** Uma mensagem do histórico da conversa. */
+export type MensagemLead = {
+  id: string;
+  texto: string;
+  tipo: string;
+  em: string;
+  direcao: string;
+};
+
+/**
  * De onde o lead veio, e portanto o que dá para saber sobre ele:
  *  - "form": preencheu o formulário (tem respostas)
  *  - "whatsapp": chegou pela conversa (temos telefone e nome do perfil)
@@ -35,6 +70,17 @@ export type Lead = {
   primeiraMensagem: string;
   /** origem rastreada (utm_source/medium/campaign), quando a planilha traz */
   utm: string;
+  /**
+   * Atribuição vinda do banco de rastreamento do WhatsApp. Preenchida em
+   * /api/leads, casando pelo telefone. Nula = este contato não veio por lá.
+   */
+  atribuicao: AtribuicaoLead | null;
+  /**
+   * Lead que existe no banco mas não tem linha na planilha. Etapa e anotação
+   * moram na planilha, então não há onde gravá-las — o painel mostra o lead e
+   * explica o motivo, em vez de oferecer um botão que falharia.
+   */
+  somenteLeitura?: boolean;
   // identificadores técnicos usados para devolver a conversão às plataformas
   // (não aparecem no card)
   leadId: string;
