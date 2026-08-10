@@ -175,9 +175,11 @@ export function toPublico(t: Tenant): TenantPublico {
  */
 
 function persistir(lista: Tenant[]): void {
-  if (process.env.TENANTS) {
+  if (!cadastroGravavel()) {
     throw new Error(
-      "O cadastro está somente-leitura (TENANTS via variável de ambiente). Configure um banco para editar em produção."
+      process.env.TENANTS
+        ? "O cadastro está somente-leitura: os clientes vêm da variável de ambiente TENANTS. Edite o valor dela na hospedagem."
+        : "O cadastro não pode ser salvo em produção: o disco é somente-leitura. Cadastre em desenvolvimento, clique em “Exportar (TENANTS)” e cole o JSON na variável de ambiente TENANTS."
     );
   }
   fs.writeFileSync(
@@ -206,8 +208,18 @@ export function listarTenants(): Tenant[] {
   return carregar();
 }
 
+/**
+ * O cadastro só é gravável onde existe disco de verdade — ou seja, em
+ * desenvolvimento.
+ *
+ * Duas razões para ser falso:
+ *  - `TENANTS` definida: a configuração vem do ambiente, o arquivo não manda.
+ *  - rodando na Vercel: o disco é somente-leitura. Antes desta checagem a tela
+ *    aparecia editável e só falhava no momento de salvar, com erro de sistema
+ *    de arquivos — o que faz parecer bug em vez de configuração faltando.
+ */
 export function cadastroGravavel(): boolean {
-  return !process.env.TENANTS;
+  return !process.env.TENANTS && !process.env.VERCEL;
 }
 
 export function criarTenant(dados: Record<string, unknown>): Tenant {

@@ -358,8 +358,10 @@ export default function Admin() {
       <div className="conteudo">
         {!gravavel && (
           <div className="aviso-ro">
-            Cadastro em modo <b>somente-leitura</b> (produção sem banco). As alterações não serão
-            salvas até um banco de dados ser configurado.
+            Cadastro em modo <b>somente-leitura</b>: em produção o disco é apagado a cada deploy,
+            então os clientes vêm da variável de ambiente <b>TENANTS</b>. Cadastre em
+            desenvolvimento, clique em <b>Exportar (TENANTS)</b> e cole o JSON nessa variável na
+            hospedagem.
           </div>
         )}
 
