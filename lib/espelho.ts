@@ -31,8 +31,20 @@ export type DadosEspelho = {
   telefone: string;
   primeiraMensagem: string;
   ctwaClid: string;
-  /** veio de anúncio, mesmo que ainda não se saiba qual */
-  deAnuncio: boolean;
+  /**
+   * O rótulo do canal que vai na coluna "Origem": "WhatsApp (anúncio)",
+   * "Google Ads", "Google orgânico"... É por esta coluna que o dashboard separa
+   * os canais, então ela precisa dizer o canal, não só o meio de contato.
+   */
+  origem: string;
+  /** o que já se sabe da campanha no momento em que a mensagem chega */
+  campanha?: string;
+  conjunto?: string;
+  anuncio?: string;
+  /** identificador de clique do Google, para devolver a conversão a eles */
+  gclid?: string;
+  /** resumo do rastreio (source, medium, palavra-chave) */
+  utm?: string;
 };
 
 /** As colunas que dá para preencher no instante em que a mensagem chega. */
@@ -40,12 +52,17 @@ function colunasIniciais(d: DadosEspelho): Record<string, string> {
   const dados: Record<string, string> = {
     Nome: d.nome,
     Telefone: d.telefone,
-    // o cliente precisa distinguir na tela quem veio de anúncio de quem chegou
-    // sozinho, mesmo antes de sabermos qual anúncio foi
-    Origem: d.deAnuncio ? "WhatsApp (anúncio)" : "WhatsApp",
+    Origem: d.origem,
   };
   if (d.primeiraMensagem) dados["Primeira mensagem"] = d.primeiraMensagem;
   if (d.ctwaClid) dados["ctwa_clid"] = d.ctwaClid;
+  if (d.gclid) dados["gclid"] = d.gclid;
+  if (d.utm) dados["UTM"] = d.utm;
+  // tráfego do site já chega com o nome da campanha quando o template de
+  // acompanhamento manda utm_campaign; o do anúncio da Meta só depois
+  if (d.campanha) dados[COL_CAMPANHA] = d.campanha;
+  if (d.conjunto) dados[COL_CONJUNTO] = d.conjunto;
+  if (d.anuncio) dados[COL_ANUNCIO] = d.anuncio;
   return dados;
 }
 

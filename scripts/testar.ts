@@ -13,7 +13,9 @@
  */
 
 import { extrairEventoWhatsApp } from "../lib/whatsapp";
-import { atribuicaoDoReferral } from "../lib/atribuicao";
+import { atribuicaoDoReferral, atribuicaoDoClique } from "../lib/atribuicao";
+import { classificarCanal, campanhaDosSinais, resumoUtm } from "../lib/canal";
+import { tokenNoTexto, gerarToken } from "../lib/cliques";
 
 let falhas = 0;
 let passes = 0;
@@ -177,6 +179,204 @@ console.log("\npayloads a descartar");
     { id: "wamid.T", from: "+55 (85) 99999-8888", timestamp: "1754650600", type: "text", text: { body: "oi" } },
   ]));
   conferir("telefone normalizado para dígitos", ev.mensagens[0].telefone, "5585999998888");
+}
+
+/* ================= tráfego do site: Google Ads e orgânico ================= */
+
+console.log("\nCanal — identificador de clique manda em tudo");
+{
+  conferir("gclid = Google Ads", classificarCanal({ gclid: "Cj0KCQ" }), "google_ads");
+  conferir("gbraid (iOS) também", classificarCanal({ gbraid: "abc" }), "google_ads");
+  conferir("wbraid também", classificarCanal({ wbraid: "abc" }), "google_ads");
+  conferir("fbclid = Meta Ads", classificarCanal({ fbclid: "IwAR" }), "meta_ads");
+  conferir(
+    "gclid vence referrer de busca orgânica",
+    classificarCanal({ gclid: "Cj0", referrer: "https://www.google.com/" }),
+    "google_ads"
+  );
+}
+
+console.log("\nCanal — UTM quando não há identificador de clique");
+{
+  conferir(
+    "google + cpc = Ads",
+    classificarCanal({ utmSource: "google", utmMedium: "cpc" }),
+    "google_ads"
+  );
+  conferir(
+    "google + organic = orgânico",
+    classificarCanal({ utmSource: "google", utmMedium: "organic" }),
+    "google_organico"
+  );
+  conferir(
+    "facebook + paid = Meta Ads",
+    classificarCanal({ utmSource: "facebook", utmMedium: "paid" }),
+    "meta_ads"
+  );
+  conferir(
+    "instagram sem meio pago = social",
+    classificarCanal({ utmSource: "instagram", utmMedium: "bio" }),
+    "social"
+  );
+  conferir(
+    "e-mail = indicação",
+    classificarCanal({ utmSource: "rd", utmMedium: "email" }),
+    "referencia"
+  );
+}
+
+console.log("\nCanal — referrer, o sinal mais fraco");
+{
+  conferir(
+    "google.com sem gclid = orgânico",
+    classificarCanal({ referrer: "https://www.google.com/" }),
+    "google_organico"
+  );
+  conferir(
+    "google.com.br também",
+    classificarCanal({ referrer: "https://www.google.com.br/search?q=advogado" }),
+    "google_organico"
+  );
+  conferir("bing = busca orgânica", classificarCanal({ referrer: "https://www.bing.com/" }), "busca_organica");
+  conferir(
+    "instagram = social",
+    classificarCanal({ referrer: "https://l.instagram.com/" }),
+    "social"
+  );
+  conferir(
+    "outro site = indicação",
+    classificarCanal({ referrer: "https://blogdoparceiro.com.br/post" }),
+    "referencia"
+  );
+  conferir(
+    "navegação interna não é origem",
+    classificarCanal({
+      referrer: "https://cliente.com.br/servicos",
+      landing: "https://cliente.com.br/contato",
+    }),
+    "desconhecido"
+  );
+}
+
+console.log("\nCanal — o que NÃO se deve concluir");
+{
+  // é o ponto mais importante do arquivo: sem sinal, não se inventa origem
+  conferir("sem nada = desconhecido, não direto", classificarCanal({}), "desconhecido");
+  conferir(
+    "referrer ilegível = desconhecido",
+    classificarCanal({ referrer: "nao-e-uma-url" }),
+    "desconhecido"
+  );
+}
+
+console.log("\nNome da campanha sem chamar API nenhuma");
+{
+  conferir(
+    "utm_campaign é o nome",
+    campanhaDosSinais({ utmCampaign: "Advogados - Search" }),
+    "Advogados - Search"
+  );
+  conferir(
+    "sem utm, o id do ValueTrack marcado com #",
+    campanhaDosSinais({ campanhaId: "21458920134" }),
+    "#21458920134"
+  );
+  // o erro de configuração mais comum: utm_campaign={campaignid} manda o ID
+  // onde deveria vir o nome. Se passasse cru, a coluna "Campanha" do cliente
+  // mostraria um número como se fosse nome de campanha.
+  conferir(
+    "utm_campaign que é só número é tratado como ID",
+    campanhaDosSinais({ utmCampaign: "21458920134" }),
+    "#21458920134"
+  );
+  conferir(
+    "nome com número dentro continua nome",
+    campanhaDosSinais({ utmCampaign: "Advogados 2026" }),
+    "Advogados 2026"
+  );
+  conferir(
+    "número curto não é ID (pode ser nome de campanha)",
+    campanhaDosSinais({ utmCampaign: "2026" }),
+    "2026"
+  );
+  conferir("sem nada, vazio", campanhaDosSinais({}), "");
+  conferir(
+    "palavra-chave entra no resumo de UTM",
+    resumoUtm({ utmSource: "google", utmMedium: "cpc", utmTerm: "advogado trabalhista" }),
+    "source=google · medium=cpc · term=advogado trabalhista"
+  );
+}
+
+console.log("\nAtribuição a partir do clique no site");
+{
+  const ads = atribuicaoDoClique({
+    id: "1",
+    canal: "google_ads",
+    gclid: "Cj0KCQ",
+    campanha: "Advogados - Search",
+    grupo: "Trabalhista",
+    criativo: "#5566",
+    landing: "https://cliente.com.br/",
+  });
+  conferir("fonte", ads.fonte, "google_ads");
+  conferir("status attributed (tem nome de campanha)", ads.status, "attributed");
+  conferir("método", ads.metodo, "site_click");
+  conferir("confiança alta com gclid", ads.confianca, "high");
+  conferir("gclid guardado para a conversão", ads.gclid, "Cj0KCQ");
+  conferir("campanha", ads.campanha, "Advogados - Search");
+
+  const semNome = atribuicaoDoClique({
+    id: "2",
+    canal: "google_ads",
+    gclid: "Cj0",
+    campanha: "#2145",
+    grupo: "",
+    criativo: "",
+    landing: "",
+  });
+  conferir("só o id da campanha = pending", semNome.status, "pending");
+
+  const organico = atribuicaoDoClique({
+    id: "3",
+    canal: "google_organico",
+    gclid: "",
+    campanha: "",
+    grupo: "",
+    criativo: "",
+    landing: "https://cliente.com.br/",
+  });
+  conferir("orgânico não é attributed", organico.status, "organic");
+  conferir("orgânico do Google guarda a fonte", organico.fonte, "google_organico");
+  conferir("confiança média sem gclid", organico.confianca, "medium");
+
+  const nada = atribuicaoDoClique({
+    id: "4",
+    canal: "desconhecido",
+    gclid: "",
+    campanha: "",
+    grupo: "",
+    criativo: "",
+    landing: "",
+  });
+  conferir("desconhecido = unknown", nada.status, "unknown");
+  conferir("confiança baixa", nada.confianca, "low");
+}
+
+console.log("\nO código na mensagem");
+{
+  const t = gerarToken();
+  conferir("token tem 6 caracteres", t.length, 6);
+  conferir("token sem vogal (não forma palavra)", /[aeiou]/.test(t), false);
+  conferir(
+    "acha o código na mensagem",
+    tokenNoTexto("Olá! Vim pelo site e gostaria de mais informações. #bcd234"),
+    "bcd234"
+  );
+  conferir("acha no meio do texto", tokenNoTexto("oi #kmn789 tudo bem"), "kmn789");
+  conferir("maiúscula também", tokenNoTexto("oi #KMN789"), "kmn789");
+  conferir("sem código, vazio", tokenNoTexto("Olá, quero informações"), "");
+  conferir("hashtag comum não vira código", tokenNoTexto("#promocao"), "");
+  conferir("token do próprio gerador é reconhecido", tokenNoTexto(`teste #${t}`), t);
 }
 
 console.log(`\n${passes} passaram, ${falhas} falharam\n`);

@@ -305,6 +305,77 @@ dizer("\n\x1b[1mEspelho na planilha\x1b[0m");
   conferir("os outros 2 leads aparecem como sem espelho", sem.length, 2);
 }
 
+dizer("\n\x1b[1mTráfego do site: Google Ads e Google orgânico\x1b[0m");
+{
+  const { registrarClique, acharClique, marcarCliqueUsado } = await import("../lib/cliques");
+  const { atribuicaoDoClique } = await import("../lib/atribuicao");
+
+  // 1. a pessoa busca no Google, clica no anúncio, entra no site e clica no WhatsApp
+  const clique = await registrarClique("acme", {
+    gclid: "Cj0KCQiA-testes",
+    utmSource: "google",
+    utmMedium: "cpc",
+    utmCampaign: "Advogados - Search",
+    utmContent: "Trabalhista - Fortaleza",
+    referrer: "https://www.google.com/",
+    landing: "https://cliente.com.br/advogado-trabalhista",
+  });
+  conferir("clique registrado", !!clique, true);
+  conferir("canal reconhecido pelo gclid", clique?.canal, "google_ads");
+  conferir("token com 6 caracteres", clique?.token.length, 6);
+
+  // 2. a mensagem chega com o código que viajou no texto
+  const achado = await acharClique("acme", clique!.token);
+  conferir("clique encontrado pelo token", !!achado, true);
+  conferir("nome da campanha veio da utm, sem API", achado?.campanha, "Advogados - Search");
+  conferir("grupo veio do utm_content", achado?.grupo, "Trabalhista - Fortaleza");
+
+  const atrib = atribuicaoDoClique(achado!);
+  const r = await gravar("acme", mensagem("wamid.G1", "5511955554444", `Olá! Vim pelo site. #${clique!.token}`));
+  // grava com a atribuição do clique, não com a do referral (que não existe)
+  const r2 = await gravarMensagem(tenant("acme"), CTX, mensagem("wamid.G2", "5511933332222", "oi"), atrib);
+  conferir("lead do site criado", r2.estado, "criado");
+
+  if (r2.estado !== "duplicada") await marcarCliqueUsado(atrib.cliqueId!, r2.leadId);
+
+  const l = await banco.query<Cru>(`SELECT * FROM leads WHERE phone='5511933332222'`);
+  conferir("fonte = google_ads", l.rows[0].attribution_source, "google_ads");
+  conferir("método = site_click", l.rows[0].attribution_method, "site_click");
+  conferir("status = attributed", l.rows[0].attribution_status, "attributed");
+  conferir("gclid guardado", l.rows[0].gclid, "Cj0KCQiA-testes");
+  conferir("campanha preenchida na hora", l.rows[0].campaign_name, "Advogados - Search");
+  conferir("sem ad_id (é conceito da Meta)", l.rows[0].ad_id, null);
+
+  const w = await banco.query<Cru>(`SELECT lead_id, used_at FROM web_clicks WHERE token=$1`, [
+    clique!.token,
+  ]);
+  conferir("clique marcado como consumido", !!w.rows[0].used_at, true);
+  conferir("clique aponta para o lead", String(w.rows[0].lead_id), String((r2 as { leadId: string }).leadId));
+
+  // o outro lead entrou sem atribuição porque foi gravado pelo caminho do
+  // referral (que não existe) — é o comportamento certo: o casamento do token
+  // acontece em processarWhatsapp, não dentro do gravarMensagem
+  conferir("lead com token mas gravado sem clique fica organic", r.estado, "criado");
+
+  // 2b. clique velho não atribui: mensagem copiada semanas depois daria origem errada
+  const antigo = await registrarClique("acme", { gclid: "velho" });
+  await banco.query(`UPDATE web_clicks SET created_at = now() - interval '100 hours' WHERE token=$1`, [
+    antigo!.token,
+  ]);
+  conferir("clique de 100h atrás é ignorado", await acharClique("acme", antigo!.token), null);
+
+  // 2c. token de outro cliente não vale (§43)
+  const deOutro = await registrarClique("outra-agencia", { gclid: "x" });
+  conferir("token de outro cliente não é encontrado", await acharClique("acme", deOutro!.token), null);
+
+  // 3. o resumo que o dashboard usa
+  const { resumoDeCliques } = await import("../lib/cliques");
+  const resumo = await resumoDeCliques("acme");
+  const ads = resumo.find((x) => x.canal === "google_ads");
+  conferir("resumo conta os cliques de Google Ads", ads?.cliques, 2);
+  conferir("e quantos viraram conversa", ads?.conversas, 1);
+}
+
 soltarLogs();
 
 dizer("\n\x1b[1m§36 — os eventos que foram registrados\x1b[0m");

@@ -25,6 +25,9 @@ export type EventoLog =
   | "graph_api_consultada"
   | "graph_api_falhou"
   | "atribuicao_salva"
+  | "clique_site"
+  | "clique_casado"
+  | "clique_nao_encontrado"
   | "planilha_espelhada"
   | "planilha_falhou"
   | "banco_indisponivel";

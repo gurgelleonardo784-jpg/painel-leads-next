@@ -151,11 +151,14 @@ export async function gravarMensagem(
              client_id, whatsapp_account_id, source, name, phone, whatsapp_user_id,
              attribution_source, attribution_status, attribution_method, attribution_confidence,
              source_type, source_url, ad_id, ctwa_clid,
+             gclid, campaign_name, adset_name, ad_name, web_click_id,
              first_message_id, first_message_text, first_message_at, last_message_at
            ) VALUES (
              $1::bigint, $2::bigint, 'whatsapp', $3, $4, NULLIF($5::text,''),
              $6, $7, $8, $9,
              NULLIF($10::text,''), NULLIF($11::text,''), NULLIF($12::text,''), NULLIF($13::text,''),
+             NULLIF($17::text,''), NULLIF($18::text,''), NULLIF($19::text,''), NULLIF($20::text,''),
+             NULLIF($21::text,'')::bigint,
              $14, NULLIF($15::text,''), $16::timestamptz, $16::timestamptz
            )
          ON CONFLICT ON CONSTRAINT leads_cliente_telefone DO NOTHING
@@ -177,6 +180,11 @@ export async function gravarMensagem(
           m.id,
           m.texto,
           em,
+          atrib.gclid || "",
+          atrib.campanha || "",
+          atrib.conjunto || "",
+          atrib.anuncio || "",
+          atrib.cliqueId || "",
         ]
       );
 
@@ -216,6 +224,11 @@ export async function gravarMensagem(
                   source_url             = COALESCE(source_url,  NULLIF($12::text,'')),
                   ad_id                  = COALESCE(ad_id,       NULLIF($13::text,'')),
                   ctwa_clid              = COALESCE(ctwa_clid,   NULLIF($14::text,'')),
+                  gclid                  = COALESCE(gclid,       NULLIF($15::text,'')),
+                  campaign_name          = COALESCE(campaign_name, NULLIF($16::text,'')),
+                  adset_name             = COALESCE(adset_name,    NULLIF($17::text,'')),
+                  ad_name                = COALESCE(ad_name,       NULLIF($18::text,'')),
+                  web_click_id           = COALESCE(web_click_id,  NULLIF($19::text,'')::bigint),
                   updated_at             = now()
             WHERE id = $1::bigint AND client_id = $2::bigint`,
           [
@@ -224,7 +237,7 @@ export async function gravarMensagem(
             em,
             m.nomePerfil,
             contaId,
-            podeAtribuir && atrib.fonte !== "organic",
+            podeAtribuir && atrib.fonte !== "organic" && atrib.fonte !== "unknown",
             atrib.fonte,
             atrib.status,
             atrib.metodo,
@@ -233,6 +246,11 @@ export async function gravarMensagem(
             atrib.sourceUrl,
             atrib.adId,
             atrib.ctwaClid,
+            atrib.gclid || "",
+            atrib.campanha || "",
+            atrib.conjunto || "",
+            atrib.anuncio || "",
+            atrib.cliqueId || "",
           ]
         );
         if (podeAtribuir && atrib.adId) lead.ad_id = atrib.adId;
@@ -399,7 +417,12 @@ export type LeadSemEspelho = {
   telefone: string;
   primeiraMensagem: string;
   ctwaClid: string;
-  deAnuncio: boolean;
+  gclid: string;
+  /** rótulo do canal para a coluna "Origem" */
+  origem: string;
+  campanha: string;
+  conjunto: string;
+  anuncio: string;
 };
 
 /**
@@ -416,10 +439,15 @@ export async function leadsSemEspelho(limite = 25, slug?: string): Promise<LeadS
     phone: string;
     first_message_text: string | null;
     ctwa_clid: string | null;
+    gclid: string | null;
     attribution_source: string;
+    campaign_name: string | null;
+    adset_name: string | null;
+    ad_name: string | null;
   }>(
     `SELECT l.id::text AS id, c.slug, l.name, l.phone, l.first_message_text,
-            l.ctwa_clid, l.attribution_source
+            l.ctwa_clid, l.gclid, l.attribution_source,
+            l.campaign_name, l.adset_name, l.ad_name
        FROM leads l
        JOIN clients c ON c.id = l.client_id
       WHERE l.sheet_lead_id IS NULL
@@ -437,8 +465,29 @@ export async function leadsSemEspelho(limite = 25, slug?: string): Promise<LeadS
     telefone: r.phone,
     primeiraMensagem: r.first_message_text || "",
     ctwaClid: r.ctwa_clid || "",
-    deAnuncio: r.attribution_source === "meta_ads",
+    gclid: r.gclid || "",
+    origem: origemDaFonte(r.attribution_source),
+    campanha: r.campaign_name || "",
+    conjunto: r.adset_name || "",
+    anuncio: r.ad_name || "",
   }));
+}
+
+/**
+ * O rótulo de "Origem" a partir da fonte guardada.
+ *
+ * Duplica de propósito o que `processarWhatsapp` faz na hora do webhook: aqui é
+ * o caminho do job, que só tem a linha do banco na mão. Uma função só serviria
+ * se as duas partissem do mesmo tipo, e não partem.
+ */
+function origemDaFonte(fonte: string): string {
+  if (fonte === "meta_ads") return "WhatsApp (anúncio)";
+  if (fonte === "google_ads") return "Google Ads";
+  if (fonte === "google_organico") return "Google orgânico";
+  if (fonte === "busca_organica") return "Busca orgânica";
+  if (fonte === "social") return "Redes sociais";
+  if (fonte === "referencia") return "Indicação de site";
+  return "WhatsApp";
 }
 
 /** Guarda o id da linha espelhada na planilha, para poder atualizá-la depois. */
@@ -447,6 +496,36 @@ export async function salvarSheetLeadId(leadId: Id, sheetLeadId: string): Promis
     leadId,
     sheetLeadId,
   ]);
+}
+
+/**
+ * Garante a linha do cliente fora de uma transação.
+ *
+ * O `clients` nasce na primeira mensagem que chega. Mas o clique no site vem
+ * antes da mensagem — é o que o gera — então quem registra clique precisa poder
+ * criar o cliente também, senão o primeiro lead de Google de um cliente novo
+ * perderia a origem justamente por ser o primeiro.
+ */
+export async function garantirClientePorSlug(slug: string, nome = ""): Promise<Id> {
+  const achado = await consultar<{ id: Id }>(
+    `SELECT id::text AS id FROM clients WHERE slug = $1`,
+    [slug]
+  );
+  if (achado.length) return achado[0].id;
+
+  const criado = await consultar<{ id: Id }>(
+    `INSERT INTO clients (slug, name) VALUES ($1, $2)
+     ON CONFLICT (slug) DO NOTHING
+       RETURNING id::text AS id`,
+    [slug, nome]
+  );
+  if (criado.length) return criado[0].id;
+
+  const denovo = await consultar<{ id: Id }>(
+    `SELECT id::text AS id FROM clients WHERE slug = $1`,
+    [slug]
+  );
+  return denovo[0].id;
 }
 
 /* ---------- leitura para o painel ---------- */
@@ -575,7 +654,7 @@ export async function leadsDoBanco(slug: string, ddiPadrao = "55"): Promise<Lead
       telefone: r.phone,
       email: r.email || "",
       data: r.first_message_at ? dataBr(r.first_message_at) : "",
-      origem: r.attribution_source === "meta_ads" ? "WhatsApp (anúncio)" : "WhatsApp",
+      origem: origemDaFonte(r.attribution_source),
       campanha: r.campaign_name || "",
       conjunto: r.adset_name || "",
       anuncio: r.ad_name || "",
@@ -634,6 +713,21 @@ export function acharAtribuicao(
   const d = String(telefone || "").replace(/\D/g, "");
   if (!d) return null;
   return mapa.get(d) || mapa.get(d.slice(-10)) || null;
+}
+
+/** O id do lead no banco a partir do telefone, dentro do cliente (§43). */
+export async function leadIdPorTelefone(slug: string, telefone: string): Promise<string | null> {
+  const d = String(telefone || "").replace(/\D/g, "");
+  if (!d) return null;
+  const rows = await consultar<{ id: Id }>(
+    `SELECT l.id::text AS id
+       FROM leads l JOIN clients c ON c.id = l.client_id
+      WHERE c.slug = $1
+        AND (l.phone = $2 OR right(l.phone, 10) = right($2, 10))
+      LIMIT 1`,
+    [slug, d]
+  );
+  return rows.length ? rows[0].id : null;
 }
 
 /**

@@ -1,7 +1,36 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import type { Lead, MensagemLead } from "@/lib/types";
+import type { Lead } from "@/lib/types";
+
+/** Um item da linha do tempo, como o /api/leads/historico devolve. */
+type ItemHistorico = {
+  tipo: "visita" | "mensagem" | "etapa" | "anotacao" | "conversao";
+  em: string;
+  titulo: string;
+  detalhe?: string;
+  direcao?: string;
+  destaque?: boolean;
+};
+
+/**
+ * O que interessa ao cliente dentro do resumo de UTM é a palavra pesquisada.
+ * "source=google · medium=cpc · term=advogado trabalhista" é linguagem de
+ * ferramenta; "advogado trabalhista" é a informação.
+ */
+function textoDaBusca(utm: string): string {
+  const m = utm.match(/term=([^·]+)/);
+  return (m ? m[1] : utm).trim();
+}
+
+/** O ponto colorido de cada tipo de evento na linha do tempo. */
+const COR_EVENTO: Record<ItemHistorico["tipo"], string> = {
+  visita: "var(--canal-google)",
+  mensagem: "var(--tipo-whats)",
+  etapa: "var(--etapa-qualificado)",
+  anotacao: "var(--txt5)",
+  conversao: "var(--canal-meta)",
+};
 import { tipoDoLead } from "@/lib/types";
 import {
   fmtTelefone,
@@ -49,39 +78,48 @@ export default function Drawer({
   const temConversa = !!atrib && atrib.mensagens > 0;
 
   /**
-   * Histórico da conversa. O resultado guarda de qual telefone ele é, então
-   * trocar de lead com o painel aberto já conta como "ainda carregando" sem
-   * precisar limpar o estado — limpar dentro do efeito dispara render em
-   * cascata, e o React reclama com razão.
+   * A história do contato: visitas ao site, conversa, etapas, anotações e
+   * conversões, tudo em ordem.
+   *
+   * O resultado guarda de qual telefone ele é, então trocar de lead com o painel
+   * aberto já conta como "ainda carregando" sem precisar limpar o estado —
+   * limpar dentro do efeito dispara render em cascata, e o React reclama com
+   * razão.
    */
-  const [conversa, setConversa] = useState<{
+  const [historico, setHistorico] = useState<{
     para: string;
-    mensagens: MensagemLead[];
+    itens: ItemHistorico[];
+    visitas: number;
     erro: string;
   } | null>(null);
 
-  const carregandoConversa = temConversa && conversa?.para !== lead.telefone;
+  const carregando = temConversa && historico?.para !== lead.telefone;
 
   useEffect(() => {
     if (!temConversa || !lead.telefone) return;
     let vivo = true;
     (async () => {
       const falha = (erro: string) =>
-        vivo && setConversa({ para: lead.telefone, mensagens: [], erro });
+        vivo && setHistorico({ para: lead.telefone, itens: [], visitas: 0, erro });
       try {
         const res = await fetch(
-          `/api/leads/mensagens?slug=${encodeURIComponent(slug)}&telefone=${encodeURIComponent(lead.telefone)}`,
+          `/api/leads/historico?slug=${encodeURIComponent(slug)}&telefone=${encodeURIComponent(lead.telefone)}`,
           { cache: "no-store" }
         );
         const data = await res.json().catch(() => null);
         if (!vivo) return;
         if (!res.ok || !data?.ok) {
-          falha("Não consegui carregar a conversa.");
+          falha("Não consegui carregar o histórico deste contato.");
           return;
         }
-        setConversa({ para: lead.telefone, mensagens: data.mensagens || [], erro: "" });
+        setHistorico({
+          para: lead.telefone,
+          itens: data.itens || [],
+          visitas: data.visitas || 0,
+          erro: "",
+        });
       } catch {
-        falha("Não consegui carregar a conversa.");
+        falha("Não consegui carregar o histórico deste contato.");
       }
     })();
     return () => {
@@ -235,7 +273,7 @@ export default function Drawer({
                 ].map((linha) => (
                   <div className="atrib-linha" key={linha.rotulo}>
                     <span className="atrib-rotulo">{linha.rotulo}</span>
-                    <span className={`atrib-valor${linha.valor ? "" : " vazio"}`}>
+                    <span className={`atrib-valor${linha.valor ? "" : " atrib-sem-valor"}`}>
                       {linha.valor || "—"}
                     </span>
                   </div>
@@ -255,15 +293,15 @@ export default function Drawer({
                 </p>
               )}
 
+              {/* Identificadores técnicos (ctwa_clid, gclid) ficam fora desta tela:
+                  quem a abre é o cliente final, e código de rastreio ali só gera
+                  dúvida. Eles continuam no banco e na exportação em CSV, que é
+                  onde servem — depuração e devolução de conversão. */}
               {lead.utm && (
-                <span className="num" style={{ fontSize: 11, color: "var(--txt6)" }}>
-                  {lead.utm}
-                </span>
-              )}
-              {atrib?.ctwaClid && (
-                <span className="num" style={{ fontSize: 10.5, color: "var(--txt6)" }}>
-                  ctwa_clid {atrib.ctwaClid}
-                </span>
+                <div className="atrib-linha">
+                  <span className="atrib-rotulo">Busca</span>
+                  <span className="atrib-valor">{textoDaBusca(lead.utm)}</span>
+                </div>
               )}
             </section>
           )}
@@ -379,46 +417,53 @@ export default function Drawer({
             )}
           </section>
 
-          {/* histórico de mensagens (§25) — o que a planilha não guarda */}
+          {/* a história inteira do contato, numa lista só */}
           {temConversa && (
             <section className="drawer-secao">
               <div className="secao-cab">
-                <span className="secao-titulo">Conversa no WhatsApp</span>
+                <span className="secao-titulo">História deste contato</span>
                 <span className="secao-meta">
-                  {atrib!.mensagens} mensagem{atrib!.mensagens === 1 ? "" : "s"}
-                  {atrib!.primeiraMensagemEm ? ` · desde ${horaCurta(atrib!.primeiraMensagemEm)}` : ""}
+                  {[
+                    historico && historico.visitas > 0
+                      ? `${historico.visitas} visita${historico.visitas === 1 ? "" : "s"} ao site`
+                      : "",
+                    `${atrib!.mensagens} mensagem${atrib!.mensagens === 1 ? "" : "s"}`,
+                  ]
+                    .filter(Boolean)
+                    .join(" · ")}
                 </span>
               </div>
 
-              {carregandoConversa ? (
-                <p className="secao-meta">Carregando a conversa…</p>
-              ) : conversa?.erro ? (
-                <p className="secao-meta">{conversa.erro}</p>
-              ) : !conversa?.mensagens.length ? (
-                <p className="secao-meta">Nenhuma mensagem registrada.</p>
+              {carregando ? (
+                <p className="secao-meta">Carregando a história…</p>
+              ) : historico?.erro ? (
+                <p className="secao-meta">{historico.erro}</p>
+              ) : !historico?.itens.length ? (
+                <p className="secao-meta">Nada registrado ainda.</p>
               ) : (
-                <div className="conversa">
-                  {conversa.mensagens.map((m, i) => (
-                    <div className={`msg${m.direcao === "out" ? " msg-saida" : ""}`} key={m.id || i}>
-                      <div className="msg-cab">
-                        <span>{i === 0 ? "1ª mensagem" : m.direcao === "out" ? "Enviada" : "Recebida"}</span>
-                        <span className="num">{horaCurta(m.em)}</span>
+                <div className="historia">
+                  {historico.itens.map((it, i) => (
+                    <div
+                      className={`hist-item${it.destaque ? " destaque" : ""}`}
+                      key={`${it.tipo}-${it.em}-${i}`}
+                    >
+                      <div className="hist-trilho">
+                        <span className="ponto" style={{ background: COR_EVENTO[it.tipo] }} />
+                        {i < historico.itens.length - 1 && <span className="linha" />}
                       </div>
-                      {m.texto ? (
-                        <span className="msg-texto">{m.texto}</span>
-                      ) : (
-                        <span className="msg-texto vazio">
-                          {m.tipo === "image"
-                            ? "(imagem)"
-                            : m.tipo === "audio"
-                              ? "(áudio)"
-                              : m.tipo === "video"
-                                ? "(vídeo)"
-                                : m.tipo === "document"
-                                  ? "(documento)"
-                                  : `(${m.tipo})`}
-                        </span>
-                      )}
+                      <div className="hist-corpo">
+                        <div className="hist-cab">
+                          <span className="hist-titulo">{it.titulo}</span>
+                          <span className="num hist-quando">{horaCurta(it.em)}</span>
+                        </div>
+                        {it.detalhe && (
+                          <span
+                            className={`hist-detalhe${it.tipo === "mensagem" ? " fala" : ""}`}
+                          >
+                            {it.detalhe}
+                          </span>
+                        )}
+                      </div>
                     </div>
                   ))}
                 </div>
@@ -457,40 +502,41 @@ export default function Drawer({
             )}
           </section>
 
-          {/* histórico: só o que a planilha realmente sabe */}
-          <section className="drawer-secao">
-            <span className="secao-titulo">Histórico</span>
-            <div className="timeline">
-              <div className="timeline-item">
-                <div className="timeline-trilho">
-                  <span className="ponto ponto-g" style={{ background: cor }} />
-                  <span className="linha" />
+          {/* contato que não passou pelo rastreamento não tem história para contar */}
+          {!temConversa && (
+            <section className="drawer-secao">
+              <span className="secao-titulo">Histórico</span>
+              <div className="timeline">
+                <div className="timeline-item">
+                  <div className="timeline-trilho">
+                    <span className="ponto ponto-g" style={{ background: cor }} />
+                    <span className="linha" />
+                  </div>
+                  <div>
+                    <div className="timeline-texto">Etapa atual: {lead.status}</div>
+                    <div className="timeline-quando">
+                      {lead.nota.trim() ? "com anotação registrada" : "sem anotação"}
+                    </div>
+                  </div>
                 </div>
-                <div>
-                  <div className="timeline-texto">Etapa atual: {lead.status}</div>
-                  <div className="timeline-quando">
-                    {lead.nota.trim() ? "com anotação registrada" : "sem anotação"}
+                <div className="timeline-item">
+                  <div className="timeline-trilho">
+                    <span className="ponto ponto-g" style={{ background: "var(--linha-hover-2)" }} />
+                  </div>
+                  <div>
+                    <div className="timeline-texto">
+                      Lead recebido{lead.origem ? ` via ${lead.origem}` : ""}
+                    </div>
+                    <div className="timeline-quando">{lead.data || "data não informada"}</div>
                   </div>
                 </div>
               </div>
-              <div className="timeline-item">
-                <div className="timeline-trilho">
-                  <span className="ponto ponto-g" style={{ background: "var(--linha-hover-2)" }} />
-                </div>
-                <div>
-                  <div className="timeline-texto">
-                    Lead recebido{lead.origem ? ` via ${lead.origem}` : ""}
-                  </div>
-                  <div className="timeline-quando">{lead.data || "data não informada"}</div>
-                </div>
-              </div>
-            </div>
-            <p className="secao-meta" style={{ lineHeight: 1.5 }}>
-              {temConversa
-                ? "Cada mudança de etapa não fica registrada — por isso esta linha do tempo mostra só o começo e o agora. A conversa acima, sim, está guardada mensagem por mensagem."
-                : "A planilha guarda o estado atual do lead, não o histórico de mudanças — por isso esta linha do tempo mostra só o começo e o agora."}
-            </p>
-          </section>
+              <p className="secao-meta" style={{ lineHeight: 1.5 }}>
+                Este contato não veio pelo WhatsApp nem pelo botão do site, então não há jornada
+                registrada — só o que a planilha guarda, que é o estado atual.
+              </p>
+            </section>
+          )}
         </div>
       </div>
     </div>

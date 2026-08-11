@@ -642,6 +642,33 @@ textarea {
   font-variant-numeric: tabular-nums;
 }
 
+/* quebra por canal, um por um, embaixo dos cards agrupados */
+.canais-linha {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 18px;
+  padding: 13px 22px 4px;
+}
+.canal-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 12px;
+  color: var(--txt4);
+}
+.canal-item .ponto {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  flex: none;
+}
+.canal-item b {
+  font-family: var(--mono);
+  font-size: 12px;
+  color: var(--txt);
+  font-variant-numeric: tabular-nums;
+}
+
 /* os três números do §34 lado a lado: Meta, painel, diferença */
 .conferencia {
   display: flex;
@@ -1236,54 +1263,91 @@ textarea {
   color: var(--txt);
   word-break: break-word;
 }
-.atrib-valor.vazio {
+/* modificador com escopo, não ".vazio": existe um `.vazio` global (o estado
+   "Nenhum lead ainda") com `padding: 70px 20px`, e um `.atrib-valor.vazio`
+   herdava esse padding — a linha da campanha ficava com 164px de altura. */
+.atrib-valor.atrib-sem-valor {
   color: var(--txt6);
   font-weight: 400;
 }
 
-/* ---------- conversa do WhatsApp ---------- */
+/* ---------- a história do contato ----------
+   Uma lista só, cronológica, misturando visita ao site, mensagem, mudança de
+   etapa e conversão. Cada tipo tem cor no ponto; a leitura é de cima para baixo
+   como qualquer conversa. */
 
-.conversa {
+.historia {
   display: flex;
   flex-direction: column;
-  gap: 7px;
-  max-height: 340px;
+  max-height: 420px;
   overflow-y: auto;
+  padding-right: 4px;
 }
-.msg {
-  border-radius: var(--raio-qa);
-  border: 1px solid var(--linha-card);
-  background: var(--superficie-2);
-  padding: 9px 12px;
+.hist-item {
+  display: grid;
+  grid-template-columns: 16px 1fr;
+  gap: 10px;
+}
+.hist-trilho {
   display: flex;
   flex-direction: column;
-  gap: 4px;
-  /* borda no lado de quem falou: recebida à esquerda, enviada à direita */
-  border-left: 2px solid var(--tipo-whats);
+  align-items: center;
+  padding-top: 5px;
 }
-.msg-saida {
-  border-left: 1px solid var(--linha-card);
-  border-right: 2px solid var(--marca);
-  background: var(--superficie-sutil);
+.hist-trilho .ponto {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex: none;
 }
-.msg-cab {
+.hist-trilho .linha {
+  width: 1px;
+  flex: 1;
+  min-height: 14px;
+  background: var(--linha-card);
+  margin-top: 3px;
+}
+.hist-corpo {
+  padding-bottom: 14px;
+  min-width: 0;
   display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+.hist-cab {
+  display: flex;
+  align-items: baseline;
   justify-content: space-between;
   gap: 10px;
+}
+.hist-titulo {
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--txt);
+}
+.hist-quando {
   font-size: 10.5px;
   color: var(--txt6);
-  text-transform: uppercase;
-  letter-spacing: 0.05em;
+  flex: none;
 }
-.msg-texto {
-  font-size: 13px;
-  line-height: 1.5;
-  color: var(--txt);
+.hist-detalhe {
+  font-size: 12.5px;
+  color: var(--txt3);
+  line-height: 1.45;
   word-break: break-word;
 }
-.msg-texto.vazio {
-  color: var(--txt6);
-  font-style: italic;
+/* o que a pessoa escreveu ganha o tratamento de fala, não de metadado */
+.hist-detalhe.fala {
+  color: var(--txt);
+  background: var(--superficie-2);
+  border: 1px solid var(--linha-card);
+  border-radius: var(--raio-qa);
+  padding: 7px 10px;
+  margin-top: 2px;
+}
+/* o clique que virou conversa é o momento que explica o lead */
+.hist-item.destaque .hist-titulo {
+  color: var(--sucesso-txt);
 }
 
 .qa-num {

@@ -108,6 +108,46 @@ CREATE TABLE IF NOT EXISTS messages (
 
 CREATE INDEX IF NOT EXISTS messages_lead_idx ON messages (lead_id, "timestamp" DESC);
 
+-- Cliques no botão de WhatsApp do site do cliente.
+--
+-- É o equivalente próprio do ctwa_clid, para o tráfego que não vem de anúncio
+-- da Meta: quem chega por busca no Google (paga ou orgânica) e clica no botão
+-- do site. O `token` vai na mensagem que a pessoa envia, e é ele que amarra a
+-- conversa que chega no webhook à origem que capturamos no site.
+CREATE TABLE IF NOT EXISTS web_clicks (
+  id            BIGSERIAL PRIMARY KEY,
+  client_id     BIGINT NOT NULL REFERENCES clients(id) ON DELETE CASCADE,
+  -- o código curto que viaja na mensagem pré-preenchida
+  token         TEXT NOT NULL UNIQUE,
+
+  channel       TEXT NOT NULL,          -- google_ads | google_organico | ... (lib/canal.ts)
+  gclid         TEXT,
+  gbraid        TEXT,
+  wbraid        TEXT,
+  fbclid        TEXT,
+  utm_source    TEXT,
+  utm_medium    TEXT,
+  utm_campaign  TEXT,
+  utm_content   TEXT,
+  utm_term      TEXT,
+  -- ValueTrack, quando o template de acompanhamento manda os ids
+  campaign_id   TEXT,
+  adgroup_id    TEXT,
+  creative_id   TEXT,
+  referrer      TEXT,
+  landing_page  TEXT,
+
+  -- qual lead consumiu este clique, e quando. Nulo = ninguém mandou mensagem
+  -- depois de clicar, e é assim que se mede quanto clique não vira conversa.
+  lead_id       BIGINT REFERENCES leads(id) ON DELETE SET NULL,
+  used_at       TIMESTAMPTZ,
+  created_at    TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+-- a busca do webhook: token de um cliente, ainda não usado
+CREATE INDEX IF NOT EXISTS web_clicks_token_idx ON web_clicks (client_id, token);
+CREATE INDEX IF NOT EXISTS web_clicks_criados_idx ON web_clicks (client_id, created_at DESC);
+
 CREATE TABLE IF NOT EXISTS attribution_events (
   id          BIGSERIAL PRIMARY KEY,
   lead_id     BIGINT NOT NULL REFERENCES leads(id) ON DELETE CASCADE,
@@ -121,3 +161,51 @@ CREATE TABLE IF NOT EXISTS attribution_events (
 );
 
 CREATE INDEX IF NOT EXISTS attribution_events_lead_idx ON attribution_events (lead_id, created_at DESC);
+
+-- ---------------------------------------------------------------------------
+-- Alterações em tabelas que já existem.
+--
+-- `CREATE TABLE IF NOT EXISTS` não acrescenta coluna em tabela criada antes, e
+-- em banco que já tem lead gravado é justamente esse o caso. Colunas novas
+-- entram aqui, sempre com IF NOT EXISTS, para o `npm run migrar` continuar
+-- podendo rodar quantas vezes for.
+-- ---------------------------------------------------------------------------
+
+-- identificador de clique do Google Ads, para devolver a conversão a eles
+ALTER TABLE leads ADD COLUMN IF NOT EXISTS gclid TEXT;
+-- qual clique do site originou este lead (rastreio de tráfego que não é da Meta)
+ALTER TABLE leads ADD COLUMN IF NOT EXISTS web_click_id BIGINT;
+
+-- Identificador de visitante, em primeira parte (localStorage do site do cliente).
+--
+-- É o que transforma cliques soltos numa jornada. Sem ele, alguém que clicou no
+-- anúncio dia 3, voltou pela busca orgânica dia 7 e mandou mensagem dia 8
+-- apareceria como um único clique — e a discussão de primeiro contato contra
+-- último contato ficaria sem resposta.
+ALTER TABLE web_clicks ADD COLUMN IF NOT EXISTS visitor_id TEXT;
+CREATE INDEX IF NOT EXISTS web_clicks_visitante_idx ON web_clicks (client_id, visitor_id);
+
+-- ---------------------------------------------------------------------------
+-- Eventos do lead: o que aconteceu com ele depois de entrar.
+--
+-- A planilha guarda o estado atual, nunca a mudança. Por isso o painel sabia
+-- dizer "está qualificado" mas não "quando virou qualificado" nem "há quantos
+-- dias está parado nesta etapa" — que é justamente o que o cliente cobra do
+-- atendimento.
+--
+-- Mensagens e cliques NÃO entram aqui: eles já têm tabela própria, e duplicar
+-- criaria duas versões da mesma verdade. A linha do tempo do painel junta as
+-- três fontes na hora de mostrar.
+-- ---------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS lead_events (
+  id         BIGSERIAL PRIMARY KEY,
+  lead_id    BIGINT NOT NULL REFERENCES leads(id) ON DELETE CASCADE,
+  -- etapa | anotacao | conversao | criado
+  tipo       TEXT NOT NULL,
+  -- o que aquele tipo de evento precisa guardar (etapa nova, texto, resultado)
+  dados      JSONB,
+  em         TIMESTAMPTZ NOT NULL DEFAULT now(),
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS lead_events_lead_idx ON lead_events (lead_id, em);

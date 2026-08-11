@@ -21,10 +21,31 @@ import { registrar } from "./registro";
 
 const GRAPH = "https://graph.facebook.com/v21.0";
 
-export type FonteAtribuicao = "meta_ads" | "organic" | "unknown";
+/**
+ * De onde o lead veio.
+ *
+ * `organic` significa "chegou no WhatsApp sozinho, sem sabermos por quê" — é
+ * ausência de informação. `google_organico` é diferente: é uma origem
+ * *conhecida*, a busca orgânica do Google. Misturar as duas faria o cliente
+ * achar que o SEO trouxe gente que na verdade já tinha o número dele.
+ */
+export type FonteAtribuicao =
+  | "meta_ads"
+  | "google_ads"
+  | "google_organico"
+  | "busca_organica"
+  | "social"
+  | "referencia"
+  | "organic"
+  | "unknown";
 /** §35 */
 export type StatusAtribuicao = "attributed" | "organic" | "unknown" | "pending";
-export type MetodoAtribuicao = "whatsapp_referral" | "meta_lead_ads" | "none";
+export type MetodoAtribuicao =
+  | "whatsapp_referral"
+  | "meta_lead_ads"
+  /** clique no botão do site, casado pelo código na mensagem */
+  | "site_click"
+  | "none";
 export type ConfiancaAtribuicao = "high" | "medium" | "low";
 
 export type Atribuicao = {
@@ -36,6 +57,20 @@ export type Atribuicao = {
   sourceUrl: string;
   adId: string;
   ctwaClid: string;
+  /** identificador de clique do Google Ads, quando a origem é o site */
+  gclid?: string;
+  /**
+   * Nomes que já vêm resolvidos na origem — o caso do tráfego do site, quando o
+   * template de acompanhamento manda `utm_campaign`. Para o anúncio da Meta
+   * estes ficam vazios e são preenchidos depois pela Graph API.
+   */
+  campanha?: string;
+  conjunto?: string;
+  anuncio?: string;
+  /** resumo do rastreio para a coluna "UTM" — é onde a palavra-chave aparece */
+  utm?: string;
+  /** o clique do site que originou, para marcar como consumido */
+  cliqueId?: string;
 };
 
 /**
@@ -97,6 +132,63 @@ export function atribuicaoDaMensagem(m: MensagemWhatsApp): Atribuicao {
   }
   if (a.ctwaClid) registrar("ctwa_clid_encontrado", { messageId: m.id });
   return a;
+}
+
+/* ---------- tráfego do site: Google Ads e Google orgânico ---------- */
+
+/**
+ * Traduz um clique no botão de WhatsApp do site em atribuição.
+ *
+ * É o caminho do lead que buscou no Google e clicou no site — nada disso passa
+ * pela Meta, então não existe `referral` nem `ctwa_clid`. Quem faz o papel do
+ * clid aqui é o token que geramos no clique.
+ *
+ * Sobre o `status`, seguindo a mesma régua do resto:
+ *  - anúncio com nome de campanha resolvido -> `attributed`
+ *  - anúncio sem nome (só o gclid) -> `pending`, dá para completar depois
+ *  - origem conhecida mas sem anúncio (busca orgânica, indicação) -> `organic`
+ *  - canal indefinido -> `unknown`, e não se inventa nada
+ */
+export function atribuicaoDoClique(clique: {
+  id: string;
+  canal: string;
+  gclid: string;
+  campanha: string;
+  grupo: string;
+  criativo: string;
+  landing: string;
+  utm?: string;
+}): Atribuicao {
+  const pago = clique.canal === "google_ads" || clique.canal === "meta_ads";
+  const temNome = !!clique.campanha && !clique.campanha.startsWith("#");
+
+  const status: StatusAtribuicao = pago
+    ? temNome
+      ? "attributed"
+      : "pending"
+    : clique.canal === "desconhecido"
+      ? "unknown"
+      : "organic";
+
+  return {
+    fonte: clique.canal as FonteAtribuicao,
+    status,
+    metodo: "site_click",
+    // o gclid é a plataforma afirmando o clique; UTM e referrer são o
+    // anunciante e o navegador afirmando, que erram mais
+    confianca: clique.gclid ? "high" : clique.canal === "desconhecido" ? "low" : "medium",
+    sourceType: pago ? "ad" : "site",
+    sourceUrl: clique.landing,
+    // ad_id é conceito da Meta; para o Google o identificador é o gclid
+    adId: "",
+    ctwaClid: "",
+    gclid: clique.gclid,
+    campanha: clique.campanha,
+    conjunto: clique.grupo,
+    anuncio: clique.criativo,
+    utm: clique.utm || "",
+    cliqueId: clique.id,
+  };
 }
 
 /* ---------- nível 3: a estrutura do anúncio na Graph API (§16) ---------- */

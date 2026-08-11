@@ -512,6 +512,85 @@ Erros de envio não derrubam o salvamento — ficam registrados na coluna Conver
 - Limite herdado do original: lê a planilha inteira a cada request (ok até alguns milhares
   de linhas). Para escalar além disso, seria o passo de trocar o banco.
 
+## Leads do Google (Ads e orgânico)
+
+Aqui existe um problema que não é óbvio: **mensagem de WhatsApp vinda de um botão
+do site não traz `referral`**. O `referral` e o `ctwa_clid` são coisa do anúncio
+da Meta. Quem busca no Google, entra no site e clica no botão do WhatsApp chega
+no painel indistinguível de quem já tinha o número.
+
+E não existe API que resolva: o Search Console entrega consulta agregada, nunca a
+pessoa. A origem tem que ser capturada no site e **carregada até a conversa**.
+
+O caminho é um identificador de clique próprio, o equivalente do `ctwa_clid`:
+
+```
+busca no Google (paga ou orgânica)
+        ↓
+site do cliente  →  rastreio.js guarda gclid / utm / referrer
+        ↓
+clique no botão de WhatsApp  →  /api/ir/<slug> registra e gera um código
+        ↓
+wa.me abre com o código na mensagem pré-preenchida
+        ↓
+webhook recebe  →  acha o código  →  atribui Google Ads / Google orgânico
+```
+
+### Instalar no site do cliente
+
+Uma linha antes de `</body>`:
+
+```html
+<script src="https://SEU-DOMINIO/rastreio.js" data-cliente="slug-do-cliente" defer></script>
+```
+
+E no `/admin`, preencher **WhatsApp — número** (com DDI, só dígitos). Sem ele o
+endpoint não tem para onde redirecionar e responde 409 explicando isso.
+
+O script reescreve sozinho todo link de `wa.me`, `api.whatsapp.com` e
+`web.whatsapp.com` da página, inclusive os que aparecem depois (construtor de
+página, pop-up). Não precisa mexer em cada botão. Se o site tiver formulário, ele
+também preenche `<input type="hidden" name="gclid">`, `name="utm_campaign">` etc.,
+e aí aquele lead chega com origem sem código visível nenhum.
+
+### Duas limitações, ditas de frente
+
+**O código fica visível na mensagem** que o visitante envia (`… #a3f9k2`). Se ele
+apagar o texto antes de enviar, a atribuição se perde e o lead entra como origem
+não identificada — nunca como orgânico. A alternativa seria casar por horário, o
+que atribuiria lead errado; atribuição errada é pior que atribuição faltando.
+
+**Sem a Google Ads API, "veio do Google Ads" a gente sabe; "de qual campanha"
+depende de você.** O `gclid` sozinho não diz a campanha. Duas saídas, nenhuma
+precisando de API:
+
+- **Melhor**: no template de acompanhamento das campanhas, mande
+  `utm_campaign={_campanha}` (ou o nome fixo por campanha) e `utm_content` com o
+  grupo. O nome vem na URL e o painel usa ele direto.
+- **Aceitável**: ValueTrack — `{campaignid}`, `{adgroupid}`, `{creative}`. O
+  painel mostra o ID prefixado com `#`, para ninguém confundir ID com nome.
+
+### O que o painel separa
+
+| Canal | Como é reconhecido |
+|---|---|
+| Google Ads | `gclid`, `gbraid` ou `wbraid` — ou `utm_source=google` com meio pago |
+| Google orgânico | referrer de `google.*` **sem** gclid |
+| Meta Ads | `referral` do WhatsApp, ou `fbclid` |
+| Busca orgânica | referrer de Bing, DuckDuckGo, Yahoo… |
+| Redes sociais | referrer de Instagram, Facebook, TikTok… |
+| Indicação de site | referrer de outro site qualquer |
+| WhatsApp direto | chegou no WhatsApp sem nenhuma pista |
+| Não identificado | sem clique, sem UTM e sem referrer |
+
+A última linha é uma decisão de projeto: **sem sinal nenhum o canal é
+"não identificado", nunca "direto"**. Navegador que bloqueia referrer produziria
+"acesso direto" falso, e o cliente tomaria decisão de mídia com número inventado.
+É a mesma regra do §17 sobre não inventar campanha.
+
+Também vale para o clique velho: token que aparece mais de 72 horas depois é
+mensagem copiada ou encaminhada, e é ignorado.
+
 ## O que o painel mostra do rastreamento
 
 O painel lê as duas fontes e costura uma lista só

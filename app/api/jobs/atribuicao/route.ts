@@ -102,7 +102,11 @@ async function rodar(req: Request) {
       telefone: lead.telefone,
       primeiraMensagem: lead.primeiraMensagem,
       ctwaClid: lead.ctwaClid,
-      deAnuncio: lead.deAnuncio,
+      gclid: lead.gclid,
+      origem: lead.origem,
+      campanha: lead.campanha,
+      conjunto: lead.conjunto,
+      anuncio: lead.anuncio,
     });
     if (sheetLeadId) {
       await salvarSheetLeadId(lead.id, sheetLeadId);

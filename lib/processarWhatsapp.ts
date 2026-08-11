@@ -16,7 +16,14 @@
 
 import type { Tenant } from "./tenants";
 import type { EventoWhatsApp, MensagemWhatsApp } from "./whatsapp";
-import { atribuicaoDaMensagem, buscarEstruturaAnuncio } from "./atribuicao";
+import {
+  atribuicaoDaMensagem,
+  atribuicaoDoClique,
+  buscarEstruturaAnuncio,
+  type Atribuicao,
+} from "./atribuicao";
+import { tokenNoTexto, acharClique, marcarCliqueUsado, cliqueParaAtribuir } from "./cliques";
+import { ROTULO_CANAL, type Canal } from "./canal";
 import { tokenDeAnuncios } from "./metaAds";
 import { bancoConfigurado } from "./db";
 import {
@@ -67,13 +74,70 @@ export async function enriquecerAnuncio(
   return true;
 }
 
+/**
+ * O rótulo que vai na coluna "Origem" da planilha.
+ *
+ * É por essa coluna que o dashboard separa canais, então ela tem que dizer o
+ * canal e não só "veio pelo WhatsApp". Lead do WhatsApp sem origem conhecida
+ * continua "WhatsApp", que é a verdade: sabemos o meio, não a origem.
+ */
+function origemParaPlanilha(a: Atribuicao): string {
+  if (a.fonte === "meta_ads") return "WhatsApp (anúncio)";
+  if (a.fonte === "organic" || a.fonte === "unknown") return "WhatsApp";
+  return ROTULO_CANAL[a.fonte as Canal] || "WhatsApp";
+}
+
+/**
+ * A atribuição de uma conversa, olhando as duas origens possíveis.
+ *
+ * O anúncio da Meta se identifica sozinho: vem `referral` no próprio evento.
+ * O tráfego do site não — quem buscou no Google, entrou no site e clicou no
+ * botão do WhatsApp chega aqui indistinguível de quem já tinha o número. Para
+ * esse caso o sinal é o código que o `/api/ir/<slug>` colocou na mensagem
+ * pré-preenchida.
+ *
+ * Ordem: o `referral` ganha. Se a Meta afirma que o clique foi no anúncio dela,
+ * é isso — um código de site na mesma mensagem seria de uma visita anterior.
+ */
+async function atribuicaoDaConversa(
+  tenant: Tenant,
+  m: MensagemWhatsApp
+): Promise<Atribuicao> {
+  const daMeta = atribuicaoDaMensagem(m);
+  if (m.referral || daMeta.ctwaClid) return daMeta;
+
+  const token = tokenNoTexto(m.texto);
+  if (!token) return daMeta;
+
+  const clique = await acharClique(tenant.slug, token);
+  if (!clique) {
+    // token inventado, expirado, ou mensagem copiada de outra conversa.
+    // Não vira origem nenhuma — melhor sem atribuição que com a errada.
+    registrar("clique_nao_encontrado", { cliente: tenant.slug, messageId: m.id });
+    return daMeta;
+  }
+
+  // o crédito pode ser de um clique anterior: quem veio pelo anúncio e voltou
+  // pelo orgânico não deve virar lead orgânico
+  const creditado = await cliqueParaAtribuir(tenant.slug, clique);
+
+  registrar("clique_casado", {
+    cliente: tenant.slug,
+    messageId: m.id,
+    canal: creditado.canal,
+    campanha: creditado.campanha || null,
+    resgatouToquePago: creditado.canal !== clique.canal || undefined,
+  });
+  return atribuicaoDoClique(creditado);
+}
+
 /** Uma mensagem: grava, espelha e tenta enriquecer. Não lança. */
 async function processarMensagem(
   tenant: Tenant,
   ctx: ContextoEvento,
   m: MensagemWhatsApp
 ): Promise<void> {
-  const atrib = atribuicaoDaMensagem(m);
+  const atrib = await atribuicaoDaConversa(tenant, m);
   const r = await gravarMensagem(tenant, ctx, m, atrib);
 
   // §22: reenvio do Meta para aqui e para de andar
@@ -87,10 +151,19 @@ async function processarMensagem(
       telefone: m.telefone,
       primeiraMensagem: m.texto,
       ctwaClid: atrib.ctwaClid,
-      deAnuncio: atrib.fonte === "meta_ads",
+      origem: origemParaPlanilha(atrib),
+      campanha: atrib.campanha,
+      conjunto: atrib.conjunto,
+      anuncio: atrib.anuncio,
+      gclid: atrib.gclid,
+      utm: atrib.utm,
     });
     if (sheetLeadId) await salvarSheetLeadId(r.leadId, sheetLeadId);
   }
+
+  // o clique do site só conta como consumido depois de existir o lead — assim
+  // "clique sem conversa" continua sendo um número confiável
+  if (atrib.cliqueId) await marcarCliqueUsado(atrib.cliqueId, r.leadId);
 
   if (r.precisaEnriquecer && r.adId) {
     await enriquecerAnuncio(tenant, r.adId, [sheetLeadId]);

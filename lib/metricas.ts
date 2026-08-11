@@ -243,20 +243,44 @@ export type CanalMetrica = {
   roas: number | null;
 };
 
+/** Nome de canal para cada fonte de atribuição rastreada. */
+const NOME_DA_FONTE: Record<string, string> = {
+  google_ads: "Google Ads",
+  google_organico: "Google orgânico",
+  meta_ads: "Meta Ads",
+  busca_organica: "Busca orgânica",
+  social: "Redes sociais",
+  referencia: "Indicação",
+  organic: "WhatsApp direto",
+};
+
 /**
- * O canal do lead sai do texto da coluna "Origem" — é o que a planilha tem.
- * Investimento só existe para o que veio da conta de anúncios da Meta; os
- * demais canais aparecem com volume e receita, sem custo.
+ * O canal do lead.
+ *
+ * Quando existe atribuição rastreada, ela manda: veio de gclid, UTM ou
+ * referrer, e é mais confiável que qualquer palavra na coluna "Origem". Só
+ * quando não há atribuição é que caímos no texto da planilha, que é o que
+ * existia antes do rastreamento.
+ *
+ * Investimento só existe para o que veio da conta de anúncios; os demais canais
+ * aparecem com volume e receita, sem custo.
  */
 export function canalDoLead(lead: Lead): string {
+  const fonte = lead.atribuicao?.fonte;
+  if (fonte && NOME_DA_FONTE[fonte]) return NOME_DA_FONTE[fonte];
+
   const o = normal(lead.origem);
   const temCampanha = !!lead.campanha.trim();
   if (/indica/.test(o)) return "Indicação";
+  // orgânico ANTES de pago: "Google orgânico" contém "google", e testar pago
+  // primeiro fundia busca orgânica com mídia paga — os dois canais que o
+  // cliente mais precisa comparar
+  if (/organic|seo/.test(o)) return /google/.test(o) ? "Google orgânico" : "Busca orgânica";
   if (/google|adwords/.test(o) || lead.gclid) return "Google Ads";
   if (/whats/.test(o)) return temCampanha ? "Meta Ads" : "WhatsApp direto";
   if (/instagram/.test(o)) return temCampanha ? "Meta Ads" : "Instagram orgânico";
   if (/facebook|meta/.test(o)) return "Meta Ads";
-  if (/site|organic|seo|blog/.test(o)) return "Site / SEO";
+  if (/site|blog/.test(o)) return "Site / SEO";
   return lead.origem.trim() || "Sem origem";
 }
 

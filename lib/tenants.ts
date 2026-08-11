@@ -59,6 +59,14 @@ export type MetaLeadgenConfig = {
 /** Captura de leads do WhatsApp Cloud API (anúncios Click-to-WhatsApp). */
 export type WhatsappConfig = {
   phoneNumberId: string; // ID do número na Cloud API; roteia o webhook para este tenant
+  /**
+   * O número em si, só dígitos com DDI (ex.: 5585999998888).
+   *
+   * O `phoneNumberId` identifica o número na API, mas não serve para montar um
+   * link `wa.me` — e é disso que o botão do site precisa. Sem este campo o
+   * rastreamento de tráfego do site não tem para onde redirecionar.
+   */
+  numero?: string;
 };
 
 /** Leitura do investimento na conta de anúncios (Marketing API). */
@@ -277,7 +285,12 @@ export function montarDadosTenant(entrada: Record<string, unknown>): Record<stri
   };
 
   const phoneNumberId = txt(entrada.whatsappPhoneNumberId);
-  if (phoneNumberId) dados.whatsapp = { phoneNumberId };
+  const numeroWhatsapp = txt(entrada.whatsappNumero).replace(/\D/g, "");
+  if (phoneNumberId || numeroWhatsapp) {
+    dados.whatsapp = numeroWhatsapp
+      ? { phoneNumberId, numero: numeroWhatsapp }
+      : { phoneNumberId };
+  }
 
   // conta de anúncios: o token é opcional — sem ele vale o da agência
   // (META_ADS_TOKEN) e, por último, o token de conversões

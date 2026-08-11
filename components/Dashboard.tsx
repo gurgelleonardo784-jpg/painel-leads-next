@@ -157,22 +157,43 @@ export default function Dashboard({
    */
   const origem = useMemo(() => {
     const total = leads.length;
-    const whats = leads.filter((l) => tipoDoLead(l) === "whatsapp").length;
+    const porFonte = (fontes: string[]) =>
+      leads.filter((l) => l.atribuicao && fontes.includes(l.atribuicao.fonte)).length;
+
     const form = leads.filter((l) => tipoDoLead(l) === "form").length;
-    const anuncio = leads.filter(
-      (l) => l.atribuicao?.status === "attributed" || l.atribuicao?.status === "pending"
-    ).length;
-    const organico = leads.filter((l) => l.atribuicao?.status === "organic").length;
+
+    // mídia paga: Meta e Google. É o que tem custo atrás.
+    const anuncio = porFonte(["meta_ads", "google_ads"]);
+    // busca orgânica é origem conhecida — não confundir com "não sabemos"
+    const buscaOrganica = porFonte(["google_organico", "busca_organica"]);
+    const outrosCanais = porFonte(["social", "referencia"]);
+    // chegou no WhatsApp sem nenhuma pista de origem
+    const whatsDireto = porFonte(["organic", "unknown"]);
+
     const naoIdentificado = leads.filter((l) => l.atribuicao?.status === "pending").length;
+    const comAtribuicao = leads.filter((l) => !!l.atribuicao).length;
+
+    const CANAIS: { fonte: string; rotulo: string; cor: string }[] = [
+      { fonte: "google_ads", rotulo: "Google Ads", cor: "var(--canal-google)" },
+      { fonte: "meta_ads", rotulo: "Meta Ads", cor: "var(--canal-meta)" },
+      { fonte: "google_organico", rotulo: "Google orgânico", cor: "var(--canal-site)" },
+      { fonte: "busca_organica", rotulo: "Outras buscas", cor: "var(--canal-site)" },
+      { fonte: "social", rotulo: "Redes sociais", cor: "var(--canal-instagram)" },
+      { fonte: "referencia", rotulo: "Indicação de site", cor: "var(--canal-indicacao)" },
+      { fonte: "organic", rotulo: "WhatsApp direto", cor: "var(--tipo-whats)" },
+    ];
+
     return {
       total,
-      whats,
       form,
       anuncio,
-      organico,
+      buscaOrganica,
+      outrosCanais,
+      whatsDireto,
       naoIdentificado,
-      semRastreio: total - anuncio - organico,
-      rastreados: anuncio + organico,
+      semRastreio: total - comAtribuicao,
+      rastreados: comAtribuicao,
+      detalhe: CANAIS.map((c) => ({ ...c, leads: porFonte([c.fonte]) })).filter((c) => c.leads > 0),
       pct: (n: number) => (total ? Math.round((n / total) * 100) : 0),
     };
   }, [leads]);
@@ -262,10 +283,10 @@ export default function Dashboard({
         <div className="origem-cards">
           {[
             { rotulo: "Total de leads", valor: origem.total, cor: "var(--txt)", pct: 100 },
-            { rotulo: "De WhatsApp", valor: origem.whats, cor: "var(--tipo-whats)", pct: origem.pct(origem.whats) },
-            { rotulo: "De formulário", valor: origem.form, cor: "var(--tipo-form)", pct: origem.pct(origem.form) },
             { rotulo: "De anúncios", valor: origem.anuncio, cor: "var(--canal-meta)", pct: origem.pct(origem.anuncio) },
-            { rotulo: "Orgânicos", valor: origem.organico, cor: "var(--etapa-qualificado)", pct: origem.pct(origem.organico) },
+            { rotulo: "Busca orgânica", valor: origem.buscaOrganica, cor: "var(--canal-site)", pct: origem.pct(origem.buscaOrganica) },
+            { rotulo: "WhatsApp direto", valor: origem.whatsDireto, cor: "var(--tipo-whats)", pct: origem.pct(origem.whatsDireto) },
+            { rotulo: "De formulário", valor: origem.form, cor: "var(--tipo-form)", pct: origem.pct(origem.form) },
           ].map((c) => (
             <div className="origem-card" key={c.rotulo}>
               <span className="rotulo">{c.rotulo}</span>
@@ -280,6 +301,19 @@ export default function Dashboard({
           ))}
         </div>
 
+        {/* a quebra completa por canal — os cards agrupam, aqui é um por um */}
+        {origem.detalhe.length > 0 && (
+          <div className="canais-linha">
+            {origem.detalhe.map((c) => (
+              <span className="canal-item" key={c.fonte}>
+                <span className="ponto" style={{ background: c.cor }} />
+                {c.rotulo}
+                <b>{inteiro(c.leads)}</b>
+              </span>
+            ))}
+          </div>
+        )}
+
         {origem.naoIdentificado > 0 && (
           <p className="secao-meta" style={{ padding: "0 22px 14px", lineHeight: 1.5 }}>
             <b>{inteiro(origem.naoIdentificado)}</b> desses leads de anúncio ainda estão sem nome
@@ -289,9 +323,9 @@ export default function Dashboard({
         )}
         {origem.semRastreio > 0 && origem.total > 0 && (
           <p className="secao-meta" style={{ padding: "0 22px 16px", lineHeight: 1.5 }}>
-            <b>{inteiro(origem.semRastreio)}</b> leads ficam fora da conta de anúncio/orgânico —
-            são os que não passaram pelo WhatsApp (formulário, cadastro manual, importados). Não
-            dá para dizer que vieram sozinhos, então não entram como orgânicos.
+            <b>{inteiro(origem.semRastreio)}</b> leads não têm origem rastreada — são os que não
+            passaram pelo WhatsApp nem pelo botão do site (formulário, cadastro manual,
+            importados). Não dá para dizer de onde vieram, então não entram em canal nenhum.
           </p>
         )}
       </div>

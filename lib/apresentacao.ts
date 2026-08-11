@@ -184,11 +184,14 @@ export function corTemperatura(t: string): string | null {
 /* ---------- cores de canal ---------- */
 
 const CORES_CANAL: { teste: RegExp; cor: string }[] = [
+  // busca orgânica antes de "google": senão "Google orgânico" pegaria a cor de
+  // Google Ads e os dois canais ficariam indistinguíveis no gráfico
+  { teste: /seo|organic|busca/, cor: "var(--canal-site)" },
   { teste: /meta|facebook/, cor: "var(--canal-meta)" },
   { teste: /google/, cor: "var(--canal-google)" },
-  { teste: /instagram/, cor: "var(--canal-instagram)" },
-  { teste: /indica/, cor: "var(--canal-indicacao)" },
-  { teste: /site|seo|organic/, cor: "var(--canal-site)" },
+  { teste: /instagram|social|rede/, cor: "var(--canal-instagram)" },
+  { teste: /indica|referenc/, cor: "var(--canal-indicacao)" },
+  { teste: /site/, cor: "var(--canal-site)" },
   { teste: /whats/, cor: "var(--tipo-whats)" },
 ];
 

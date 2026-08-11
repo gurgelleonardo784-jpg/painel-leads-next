@@ -11,7 +11,8 @@
     "migrar": "node scripts/migrar.mjs",
     "testar": "tsx scripts/testar.ts && tsx scripts/testar-banco.mts",
     "banco:local": "tsx scripts/banco-local.mts",
-    "demo": "tsx scripts/demo.mts"
+    "demo": "tsx scripts/demo.mts",
+    "demo:jornada": "tsx scripts/demo-jornada.mts"
   },
   "dependencies": {
     "googleapis": "^173.0.0",

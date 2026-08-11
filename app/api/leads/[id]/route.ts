@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { tenantDaSessao } from "@/lib/auth";
 import { salvarLead, registrarConversao, type SalvarCampos } from "@/lib/sheets";
 import { enviarConversoes, resumoConversao } from "@/lib/conversoes";
+import { registrarEventoPelaPlanilha } from "@/lib/eventosLead";
 
 function agoraTexto(tz: string): string {
   const p: Record<string, string> = {};
@@ -46,6 +47,20 @@ export async function PATCH(req: Request, ctx: { params: Promise<{ id: string }>
   try {
     const res = await salvarLead(tenant, id, campos);
 
+    // o histórico que a planilha não guarda: cada mudança de etapa e cada
+    // anotação, com data. É o que permite responder depois "quanto tempo levou
+    // para qualificar" e "há quantos dias está parado aqui".
+    if (res.ok) {
+      if (typeof campos.status !== "undefined") {
+        await registrarEventoPelaPlanilha(tenant.slug, id, "etapa", { para: campos.status });
+      }
+      if (typeof campos.nota !== "undefined" && campos.nota.trim()) {
+        await registrarEventoPelaPlanilha(tenant.slug, id, "anotacao", {
+          texto: campos.nota.trim().slice(0, 500),
+        });
+      }
+    }
+
     // Devolve a conversão à Meta/Google quando o status muda para um status configurado
     let conversao: string | null = null;
     if (
@@ -57,7 +72,13 @@ export async function PATCH(req: Request, ctx: { params: Promise<{ id: string }>
     ) {
       const resultados = await enviarConversoes(tenant, res.identificadores, campos.status);
       conversao = resumoConversao(resultados, agoraTexto(tenant.tz));
-      if (conversao) await registrarConversao(tenant, id, conversao);
+      if (conversao) {
+        await registrarConversao(tenant, id, conversao);
+        await registrarEventoPelaPlanilha(tenant.slug, id, "conversao", {
+          etapa: campos.status,
+          resultado: conversao,
+        });
+      }
     }
 
     return NextResponse.json({ ...res, conversao }, { status: res.ok ? 200 : 404 });

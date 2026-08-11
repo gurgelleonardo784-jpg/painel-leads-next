@@ -14,7 +14,7 @@ type AdminTenant = {
   aba: string;
   ddiPadrao: string;
   conversoes?: { meta?: { datasetId?: string; accessToken?: string } };
-  whatsapp?: { phoneNumberId?: string };
+  whatsapp?: { phoneNumberId?: string; numero?: string };
   metaAds?: { adAccountId?: string; accessToken?: string };
   mostrarCustoAoCliente?: boolean;
 };
@@ -29,6 +29,7 @@ type FormState = {
   aba: string;
   ddiPadrao: string;
   whatsappPhoneNumberId: string;
+  whatsappNumero: string;
   metaDatasetId: string;
   metaAccessToken: string;
   metaAdAccountId: string;
@@ -44,6 +45,7 @@ const FORM_VAZIO: FormState = {
   aba: "Página1",
   ddiPadrao: "55",
   whatsappPhoneNumberId: "",
+  whatsappNumero: "",
   metaDatasetId: "",
   metaAccessToken: "",
   metaAdAccountId: "",
@@ -188,6 +190,7 @@ export default function Admin() {
       aba: t.aba,
       ddiPadrao: t.ddiPadrao,
       whatsappPhoneNumberId: t.whatsapp?.phoneNumberId || "",
+      whatsappNumero: t.whatsapp?.numero || "",
       metaDatasetId: t.conversoes?.meta?.datasetId || "",
       metaAccessToken: t.conversoes?.meta?.accessToken || "",
       metaAdAccountId: t.metaAds?.adAccountId || "",
@@ -425,6 +428,14 @@ export default function Admin() {
                   value={form.whatsappPhoneNumberId}
                   onChange={(e) => setForm({ ...form, whatsappPhoneNumberId: e.target.value })}
                   placeholder="ID do número na Cloud API — roteia os leads deste cliente"
+                />
+              </label>
+              <label className="campo campo-full">
+                <span>WhatsApp — número (para o botão do site)</span>
+                <input
+                  value={form.whatsappNumero}
+                  onChange={(e) => setForm({ ...form, whatsappNumero: e.target.value })}
+                  placeholder="5585999998888 — com DDI, só números"
                 />
               </label>
               <label className="campo campo-full">
