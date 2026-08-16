@@ -20,6 +20,12 @@ export type Canal =
   | "social"
   | "referencia"
   | "direto"
+  /**
+   * Mídia paga sem saber a plataforma. Só aparece quando o clique não chegou a
+   * ser gravado e a origem foi deduzida do prefixo "PAG" do código — que
+   * confunde Google e Meta de propósito, para o código ficar curto.
+   */
+  | "pago"
   | "desconhecido";
 
 /** O que o script do site captura e manda para o endpoint de redirecionamento. */
@@ -86,7 +92,10 @@ export function classificarCanal(s: SinaisDeOrigem): Canal {
     const ehPago = PAGO.test(meio);
     if (/google/.test(fonte)) return ehPago ? "google_ads" : "google_organico";
     if (/(facebook|instagram|meta|fb|ig)/.test(fonte)) return ehPago ? "meta_ads" : "social";
-    if (ehPago) return "referencia"; // pago de alguma outra plataforma
+    // pago de plataforma que não modelamos (Bing, LinkedIn, TikTok…). Chamar
+    // isso de "indicação" escondia que houve investimento — e mídia paga
+    // aparecendo como tráfego gratuito falseia o cálculo de custo por lead.
+    if (ehPago) return "pago";
     if (/(organic|seo)/.test(meio)) return "busca_organica";
     if (/(social)/.test(meio)) return "social";
     if (/(referral|referencia|indicacao)/.test(meio)) return "referencia";
@@ -128,12 +137,13 @@ export const ROTULO_CANAL: Record<Canal, string> = {
   social: "Redes sociais",
   referencia: "Indicação de site",
   direto: "Acesso direto",
+  pago: "Mídia paga",
   desconhecido: "Origem não identificada",
 };
 
 /** Canais que são mídia paga — o que entra em "leads de anúncios". */
 export function ehPago(canal: string): boolean {
-  return canal === "google_ads" || canal === "meta_ads";
+  return canal === "google_ads" || canal === "meta_ads" || canal === "pago";
 }
 
 /**

@@ -20,36 +20,108 @@ import crypto from "node:crypto";
 import { consultar } from "./db";
 import { garantirClientePorSlug } from "./repositorio";
 import {
-  classificarCanal,
   campanhaDosSinais,
   grupoDosSinais,
   criativoDosSinais,
   resumoUtm,
+  hostDoReferrer,
   type Canal,
   type SinaisDeOrigem,
 } from "./canal";
 
-/**
- * Alfabeto sem vogais e sem os caracteres que se confundem lidos em voz alta
- * (0/o, 1/l, 5/s). O token aparece na conversa e às vezes é ditado por telefone.
- */
-const ALFABETO = "bcdfghjkmnpqrtvwxyz2346789";
-const TAMANHO = 6;
+/* ---------- o código que viaja na mensagem ---------- */
 
-export function gerarToken(): string {
-  const bytes = crypto.randomBytes(TAMANHO);
-  let s = "";
-  for (let i = 0; i < TAMANHO; i++) s += ALFABETO[bytes[i] % ALFABETO.length];
-  return s;
+/**
+ * O código carrega a origem no próprio prefixo: `PAG-7K3M`.
+ *
+ * A alternativa seria um código opaco, resolvido só pela consulta ao banco — e
+ * ela quebra junto com o banco. Com a origem no prefixo, se a gravação do
+ * clique falhar (Neon hibernando, rede oscilando), a mensagem que chega ainda
+ * diz de onde a pessoa veio. É o que permite o redirect não esperar por
+ * gravação nenhuma.
+ */
+export const PREFIXOS = ["PAG", "IG", "FB", "ORG", "REF", "DIR"] as const;
+export type Prefixo = (typeof PREFIXOS)[number];
+
+const PREFIXO_POR_CANAL: Record<Canal, Prefixo> = {
+  google_ads: "PAG",
+  meta_ads: "PAG",
+  google_organico: "ORG",
+  busca_organica: "ORG",
+  social: "REF", // sobrescrito abaixo quando dá para saber se é IG ou FB
+  referencia: "REF",
+  direto: "DIR",
+  // so aparece na volta (prefixo -> canal); na ida o classificador nunca devolve
+  pago: "PAG",
+  desconhecido: "DIR",
+};
+
+/**
+ * Alfanumérico maiúsculo sem os pares que se confundem lendo ou ditando:
+ * O/0 e I/1. Sobram 32 símbolos.
+ */
+const ALFABETO = "23456789ABCDEFGHJKLMNPQRSTUVWXYZ";
+
+/**
+ * Quatro caracteres, não dois.
+ *
+ * Com dois (1.024 combinações por prefixo), 50 cliques já dão ~70% de chance de
+ * dois deles receberem o mesmo código — e aí um lead herda a origem do clique
+ * de outra pessoa. Dado errado é pior que dado faltando, porque parece certo.
+ * Com quatro (1.048.576) a mesma situação cai para 0,12%.
+ */
+const SUFIXO = 4;
+
+/** IG e FB só se distinguem olhando de onde a pessoa veio. */
+function prefixoDoCanal(canal: Canal, sinais?: SinaisDeOrigem): Prefixo {
+  if (canal === "social" && sinais) {
+    const onde = `${sinais.utmSource || ""} ${hostDoReferrer(sinais.referrer || "")}`.toLowerCase();
+    if (/instagram|\big\b/.test(onde)) return "IG";
+    if (/facebook|\bfb\b/.test(onde)) return "FB";
+  }
+  return PREFIXO_POR_CANAL[canal];
 }
 
-/** O padrão que procuramos no texto da mensagem recebida. */
-const NO_TEXTO = new RegExp(`#([${ALFABETO}]{${TAMANHO}})`, "i");
+export function gerarCodigo(canal: Canal, sinais?: SinaisDeOrigem): string {
+  const bytes = crypto.randomBytes(SUFIXO);
+  let s = "";
+  for (let i = 0; i < SUFIXO; i++) s += ALFABETO[bytes[i] % ALFABETO.length];
+  return `${prefixoDoCanal(canal, sinais)}-${s}`;
+}
 
-/** Acha o token na mensagem que a pessoa enviou, se ele sobreviveu. */
-export function tokenNoTexto(texto: string): string {
+/** O padrão procurado no texto da mensagem recebida. */
+const NO_TEXTO = new RegExp(`\\b(${PREFIXOS.join("|")})-([${ALFABETO}]{${SUFIXO}})\\b`, "i");
+
+/** Acha o código na mensagem que a pessoa enviou, se ele sobreviveu. */
+export function codigoNoTexto(texto: string): string {
   const m = String(texto || "").match(NO_TEXTO);
-  return m ? m[1].toLowerCase() : "";
+  return m ? `${m[1].toUpperCase()}-${m[2].toUpperCase()}` : "";
+}
+
+/**
+ * A origem que dá para deduzir só do prefixo, quando o clique não foi gravado.
+ *
+ * `PAG` diz que foi mídia paga mas não diz a plataforma — Google e Meta caem no
+ * mesmo prefixo. É perda de precisão aceitável para um caso raro (falha de
+ * gravação); a linha do clique, quando existe, tem o detalhe todo.
+ */
+export function canalDoPrefixo(codigo: string): Canal | null {
+  const p = codigo.split("-")[0]?.toUpperCase();
+  switch (p) {
+    case "PAG":
+      return "pago";
+    case "IG":
+    case "FB":
+      return "social";
+    case "ORG":
+      return "busca_organica";
+    case "REF":
+      return "referencia";
+    case "DIR":
+      return "desconhecido";
+    default:
+      return null;
+  }
 }
 
 export type CliqueGravado = {
@@ -57,19 +129,22 @@ export type CliqueGravado = {
   canal: Canal;
 };
 
-/** Registra o clique e devolve o token que vai na mensagem. */
+/**
+ * Grava o clique.
+ *
+ * O código e o canal vêm de fora, já decididos: quem chama precisa deles antes
+ * para poder redirecionar sem esperar esta gravação.
+ */
 export async function registrarClique(
   slug: string,
   sinais: SinaisDeOrigem,
-  nomeCliente = "",
-  visitanteId = ""
+  token: string,
+  canal: Canal,
+  extras: { nomeCliente?: string; visitanteId?: string; userAgent?: string } = {}
 ): Promise<CliqueGravado | null> {
-  const canal = classificarCanal(sinais);
-  const token = gerarToken();
-
   // o clique vem antes da primeira mensagem, então às vezes é ele que cria o
   // cliente no banco
-  await garantirClientePorSlug(slug, nomeCliente);
+  await garantirClientePorSlug(slug, extras.nomeCliente || "");
 
   const corta = (v: unknown, n = 500) => {
     const s = String(v ?? "").trim();
@@ -82,13 +157,13 @@ export async function registrarClique(
         gclid, gbraid, wbraid, fbclid,
         utm_source, utm_medium, utm_campaign, utm_content, utm_term,
         campaign_id, adgroup_id, creative_id,
-        referrer, landing_page, visitor_id
+        referrer, landing_page, visitor_id, user_agent
       )
       SELECT c.id, $2, $3,
              $4, $5, $6, $7,
              $8, $9, $10, $11, $12,
              $13, $14, $15,
-             $16, $17, $18
+             $16, $17, $18, $19
         FROM clients c
        WHERE c.slug = $1
       RETURNING token`,
@@ -110,7 +185,8 @@ export async function registrarClique(
       corta(sinais.criativoId, 60),
       corta(sinais.referrer),
       corta(sinais.landing),
-      corta(visitanteId, 80),
+      corta(extras.visitanteId, 80),
+      corta(extras.userAgent, 400),
     ]
   );
 
@@ -176,7 +252,10 @@ export async function acharClique(
         AND w.token = $2
         AND w.created_at > now() - ($3 || ' hours')::interval
       LIMIT 1`,
-    [slug, token.toLowerCase(), String(horas)]
+    // maiúsculas: é como o código é gerado e como o `codigoNoTexto` devolve.
+    // Já foi `toLowerCase()` aqui, sobra do alfabeto antigo, e a busca não
+    // achava nada — atribuição silenciosamente perdida em todo clique do site.
+    [slug, token.toUpperCase(), String(horas)]
   );
   if (!rows.length) return null;
   const r = rows[0];

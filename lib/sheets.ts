@@ -73,6 +73,17 @@ function formatarValor(v: unknown): string {
   return String(v).trim();
 }
 
+/**
+ * Limpa o e-mail vindo da planilha.
+ *
+ * Célula com hiperlink às vezes guarda "mailto:fulano@x.com" como texto. Sem
+ * tirar o prefixo, o card mostra "mailto:fulano@x.com" e o link vira
+ * "mailto:mailto:…", que não abre o cliente de e-mail em lugar nenhum.
+ */
+function limparEmail(v: string): string {
+  return v.replace(/^\s*mailto:\s*/i, "").trim();
+}
+
 /** Reproduz mapearCabecalho_ do Codigo.gs. A ordem dos testes importa. */
 function mapearCabecalho(cab: string[]): Record<number, Papel> {
   const mapa: Record<number, Papel> = {};
@@ -146,7 +157,7 @@ async function prepararPlanilha(
   valores: unknown[][]
 ): Promise<string[]> {
   const cab = (valores[0] || []).map((h) => String(h).trim());
-  const updates: { range: string; values: string[][] }[] = [];
+  const updates: { range: string; values: (string | number)[][] }[] = [];
 
   // garante as colunas de sistema no cabeçalho
   for (const nome of [COL_ID, COL_STATUS, COL_NOTA, COL_ATUALIZADO]) {
@@ -270,7 +281,8 @@ export async function lerLeads(tenant: Tenant): Promise<Lead[]> {
       }
 
       if (papel && !lead[papel]) {
-        lead[papel] = valor; // campos do topo do card não repetem na lista de respostas
+        // campos do topo do card não repetem na lista de respostas
+        lead[papel] = papel === "email" ? limparEmail(valor) : valor;
         continue;
       }
       if (valor !== "") lead.respostas.push({ pergunta: titulo, resposta: valor });
@@ -287,7 +299,15 @@ export async function lerLeads(tenant: Tenant): Promise<Lead[]> {
 
 /* ---------- gravação de status/anotações (porta apiSalvarLead) ---------- */
 
-export type SalvarCampos = { status?: string; nota?: string };
+export type SalvarCampos = {
+  status?: string;
+  nota?: string;
+  /** valor do negócio fechado; 0 limpa a célula */
+  valor?: number;
+};
+
+/** Nome usado ao criar a coluna de valor, quando o cliente ainda não tem uma. */
+const COL_VALOR_PADRAO = "Valor";
 
 export type ResultadoSalvar = {
   ok: boolean;
@@ -318,7 +338,7 @@ export async function salvarLead(
   }
   if (linhaNum === -1) return { ok: false, erro: "Lead não encontrado." };
 
-  const updates: { range: string; values: string[][] }[] = [];
+  const updates: { range: string; values: (string | number)[][] }[] = [];
   const garantirCol = (nome: string): number => {
     let i = cab.indexOf(nome);
     if (i === -1) {
@@ -339,6 +359,30 @@ export async function salvarLead(
   }
   const iAtu = garantirCol(COL_ATUALIZADO);
   updates.push({ range: `${tenant.aba}!${colLetter(iAtu + 1)}${linhaNum}`, values: [[agoraTexto(tenant.tz)]] });
+
+  /**
+   * O valor do negócio entra como número JSON, não como texto.
+   *
+   * Dinheiro precisa virar número na planilha, senão o cliente não consegue
+   * somar a própria coluna. A tentação é usar `USER_ENTERED` e deixar o Sheets
+   * interpretar — mas aí o resultado depende do idioma da planilha: "3450.75"
+   * numa planilha em português vira **texto**, porque lá o separador decimal é
+   * a vírgula. Já foi assim, e a coluna ficou insomável.
+   *
+   * Mandando o número cru com `RAW`, o Sheets guarda número em qualquer idioma
+   * e não há o que adivinhar. E `RAW` continua sendo o certo para o resto do
+   * lote: uma anotação começando com "=" não vira fórmula.
+   */
+  if (typeof campos.valor !== "undefined") {
+    // usa a coluna de valor que já existir (pode se chamar "Ticket", "Receita"…)
+    let iValor = cab.findIndex((h) => COL_VALOR.has(normalizar(h)));
+    if (iValor === -1) iValor = garantirCol(COL_VALOR_PADRAO);
+    updates.push({
+      range: `${tenant.aba}!${colLetter(iValor + 1)}${linhaNum}`,
+      // 0 limpa a célula: "R$ 0,00" num lead sem venda polui o relatório
+      values: [[campos.valor > 0 ? campos.valor : ""]],
+    });
+  }
 
   await sheets.spreadsheets.values.batchUpdate({
     spreadsheetId: tenant.spreadsheetId,
@@ -397,7 +441,7 @@ export async function registrarConversao(
   }
   if (linhaNum === -1) return;
 
-  const updates: { range: string; values: string[][] }[] = [];
+  const updates: { range: string; values: (string | number)[][] }[] = [];
   let i = cab.indexOf(COL_CONVERSAO);
   if (i === -1) {
     i = cab.length;
@@ -530,7 +574,7 @@ export async function atualizarColunasLead(
     if (typeof porPapel[papel] === "undefined") porPapel[papel] = Number(k);
   }
 
-  const updates: { range: string; values: string[][] }[] = [];
+  const updates: { range: string; values: (string | number)[][] }[] = [];
   for (const chave of preenchidos) {
     let i = cab.indexOf(chave);
     if (i === -1) {

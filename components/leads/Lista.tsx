@@ -11,6 +11,7 @@ import {
   ROTULO_TIPO,
   COR_TIPO,
 } from "@/lib/apresentacao";
+import { moedaExata } from "@/lib/metricas";
 import { Chevron } from "../Icones";
 
 /** Visão em lista: mais densa que o pipeline, boa para varrer muitos leads. */
@@ -34,6 +35,7 @@ export default function Lista({
         <span className="col-tel">Telefone</span>
         <span className="col-email">E-mail</span>
         <span className="col-origem">Origem</span>
+        <span className="col-valor">Valor</span>
         <span>Etapa</span>
         <span>Ações</span>
       </div>
@@ -88,8 +90,22 @@ export default function Lista({
             <span className="truncar col-email" style={{ fontSize: 12.5, color: "var(--link)" }}>
               {l.email || "—"}
             </span>
-            <span className="col-origem" style={{ fontSize: 12, color: "var(--txt3)" }}>
-              {l.origem || "—"}
+            {/* origem em duas alturas: o canal em cima, a campanha embaixo.
+                Só o canal responde "veio do WhatsApp"; quem paga por anúncio
+                precisa da campanha, e é ela que faltava aqui. */}
+            <span className="col-origem celula-origem">
+              <span className="canal">{l.origem || "—"}</span>
+              {(l.campanha || l.anuncio) && (
+                <span
+                  className="campanha truncar"
+                  title={[l.campanha, l.conjunto, l.anuncio].filter(Boolean).join(" · ")}
+                >
+                  {[l.campanha, l.anuncio].filter(Boolean).join(" · ")}
+                </span>
+              )}
+            </span>
+            <span className="col-valor num">
+              {l.valor > 0 ? moedaExata(l.valor) : <span style={{ color: "var(--txt6)" }}>—</span>}
             </span>
             <span>
               <span

@@ -43,10 +43,13 @@ async function main() {
     process.exit(1);
   }
 
+  // TLS verificado por padrão; DATABASE_SSL_INSEGURO=1 só para certificado
+  // autoassinado. Mesma regra do lib/db.ts.
   const local = /@(localhost|127\.0\.0\.1)[:/]/.test(url) || /sslmode=disable/.test(url);
+  const inseguro = process.env.DATABASE_SSL_INSEGURO === "1";
   const cliente = new pg.Client({
     connectionString: url,
-    ssl: local ? undefined : { rejectUnauthorized: false },
+    ssl: local ? undefined : inseguro ? { rejectUnauthorized: false } : true,
   });
 
   const sql = fs.readFileSync(path.join(raiz, "lib", "schema.sql"), "utf8");
@@ -73,17 +76,27 @@ async function main() {
     process.exit(1);
   }
 
+  // A lista sai do próprio schema.sql, não de uma constante aqui.
+  //
+  // Já esteve escrita à mão, e ficou para trás quando tabelas novas entraram: a
+  // conferência passava com "banco pronto" sem olhar as duas mais recentes. Uma
+  // verificação que não acompanha o que verifica é pior que nenhuma, porque dá
+  // confiança falsa.
+  const esperadas = [...sql.matchAll(/CREATE TABLE IF NOT EXISTS\s+(\w+)/gi)]
+    .map((m) => m[1])
+    .sort();
+
   const { rows } = await cliente.query(
     `SELECT table_name, (SELECT count(*) FROM information_schema.columns c
                           WHERE c.table_name = t.table_name AND c.table_schema = 'public') AS colunas
        FROM information_schema.tables t
       WHERE t.table_schema = 'public'
-        AND t.table_name IN ('clients','whatsapp_accounts','leads','messages','attribution_events')
-      ORDER BY t.table_name`
+        AND t.table_name = ANY($1)
+      ORDER BY t.table_name`,
+    [esperadas]
   );
   for (const r of rows) ok(`${r.table_name} (${r.colunas} colunas)`);
 
-  const esperadas = ["attribution_events", "clients", "leads", "messages", "whatsapp_accounts"];
   const faltando = esperadas.filter((n) => !rows.some((r) => r.table_name === n));
   if (faltando.length) {
     falta("Tabelas ausentes: " + faltando.join(", "));

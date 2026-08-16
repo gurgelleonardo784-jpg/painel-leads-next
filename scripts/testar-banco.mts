@@ -307,11 +307,25 @@ dizer("\n\x1b[1mEspelho na planilha\x1b[0m");
 
 dizer("\n\x1b[1mTráfego do site: Google Ads e Google orgânico\x1b[0m");
 {
-  const { registrarClique, acharClique, marcarCliqueUsado } = await import("../lib/cliques");
+  const { registrarClique, acharClique, marcarCliqueUsado, gerarCodigo } = await import(
+    "../lib/cliques"
+  );
+  const { classificarCanal } = await import("../lib/canal");
   const { atribuicaoDoClique } = await import("../lib/atribuicao");
 
+  /**
+   * Faz o que a rota /api/ir faz: classifica, gera o código e só então grava.
+   * O código nasce fora do banco de propósito — é o que permite o redirect não
+   * esperar pela gravação.
+   */
+  async function gravarClique(slug: string, sinais: Parameters<typeof classificarCanal>[0]) {
+    const canal = classificarCanal(sinais);
+    const codigo = gerarCodigo(canal, sinais);
+    return registrarClique(slug, sinais, codigo, canal);
+  }
+
   // 1. a pessoa busca no Google, clica no anúncio, entra no site e clica no WhatsApp
-  const clique = await registrarClique("acme", {
+  const clique = await gravarClique("acme", {
     gclid: "Cj0KCQiA-testes",
     utmSource: "google",
     utmMedium: "cpc",
@@ -322,7 +336,7 @@ dizer("\n\x1b[1mTráfego do site: Google Ads e Google orgânico\x1b[0m");
   });
   conferir("clique registrado", !!clique, true);
   conferir("canal reconhecido pelo gclid", clique?.canal, "google_ads");
-  conferir("token com 6 caracteres", clique?.token.length, 6);
+  conferir("código com prefixo PAG", clique?.token.split("-")[0], "PAG");
 
   // 2. a mensagem chega com o código que viajou no texto
   const achado = await acharClique("acme", clique!.token);
@@ -358,14 +372,14 @@ dizer("\n\x1b[1mTráfego do site: Google Ads e Google orgânico\x1b[0m");
   conferir("lead com token mas gravado sem clique fica organic", r.estado, "criado");
 
   // 2b. clique velho não atribui: mensagem copiada semanas depois daria origem errada
-  const antigo = await registrarClique("acme", { gclid: "velho" });
+  const antigo = await gravarClique("acme", { gclid: "velho" });
   await banco.query(`UPDATE web_clicks SET created_at = now() - interval '100 hours' WHERE token=$1`, [
     antigo!.token,
   ]);
   conferir("clique de 100h atrás é ignorado", await acharClique("acme", antigo!.token), null);
 
   // 2c. token de outro cliente não vale (§43)
-  const deOutro = await registrarClique("outra-agencia", { gclid: "x" });
+  const deOutro = await gravarClique("outra-agencia", { gclid: "x" });
   conferir("token de outro cliente não é encontrado", await acharClique("acme", deOutro!.token), null);
 
   // 3. o resumo que o dashboard usa

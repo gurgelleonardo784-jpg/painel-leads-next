@@ -13,7 +13,7 @@
 
 import { consultar, bancoConfigurado } from "./db";
 
-export type TipoEvento = "criado" | "etapa" | "anotacao" | "conversao";
+export type TipoEvento = "criado" | "etapa" | "anotacao" | "conversao" | "valor";
 
 export type EventoLead = {
   tipo: TipoEvento;

@@ -48,14 +48,24 @@ function carregarTenants() {
 }
 
 // ---- banco de leads ----
-const TABELAS = ["clients", "whatsapp_accounts", "leads", "messages", "attribution_events"];
+// derivado do schema, pelo mesmo motivo do migrar.mjs: lista escrita à mão fica
+// para trás quando entra tabela nova, e a conferência passa sem olhar o que
+// importa
+const TABELAS = [
+  ...fs
+    .readFileSync(path.join(raiz, "lib", "schema.sql"), "utf8")
+    .matchAll(/CREATE TABLE IF NOT EXISTS\s+(\w+)/gi),
+]
+  .map((m) => m[1])
+  .sort();
 
 async function checarBanco() {
   const url = process.env.DATABASE_URL;
   const local = /@(localhost|127\.0\.0\.1)[:/]/.test(url) || /sslmode=disable/.test(url);
+  const inseguro = process.env.DATABASE_SSL_INSEGURO === "1";
   const cliente = new pg.Client({
     connectionString: url,
-    ssl: local ? undefined : { rejectUnauthorized: false },
+    ssl: local ? undefined : inseguro ? { rejectUnauthorized: false } : true,
   });
 
   try {

@@ -4,8 +4,8 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { Lead, TenantPublico, TipoLead } from "@/lib/types";
 import { tipoDoLead } from "@/lib/types";
 import { parseData } from "@/lib/format";
-import { textoBusca, tempoRelativo, iniciais } from "@/lib/apresentacao";
-import { moeda, inteiro, percentual, ehGanho, ehQualificado, ehPerdido } from "@/lib/metricas";
+import { textoBusca, tempoRelativo, iniciais, proximaEtapa } from "@/lib/apresentacao";
+import { moeda, moedaExata, inteiro, percentual, ehGanho, ehQualificado, ehPerdido } from "@/lib/metricas";
 import Kanban from "./leads/Kanban";
 import Lista from "./leads/Lista";
 import Drawer from "./leads/Drawer";
@@ -14,7 +14,8 @@ import Dashboard from "./Dashboard";
 import TemaBotao from "./TemaBotao";
 import { Atualizar, Mais, Lupa, Baixar } from "./Icones";
 
-export type SalvarCampos = { status?: string; nota?: string };
+/** O que o painel consegue gravar num lead. Espelha o SalvarCampos do lib/sheets. */
+export type SalvarCampos = { status?: string; nota?: string; valor?: number };
 
 type Tela = "carregando" | "login" | "app";
 type Modulo = "leads" | "dashboard";
@@ -148,6 +149,7 @@ export default function Painel({ tenant }: { tenant: TenantPublico }) {
                 ...l,
                 ...(typeof campos.status !== "undefined" ? { status: campos.status } : {}),
                 ...(typeof campos.nota !== "undefined" ? { nota: campos.nota } : {}),
+                ...(typeof campos.valor !== "undefined" ? { valor: campos.valor } : {}),
               }
             : l
         )
@@ -170,8 +172,9 @@ export default function Painel({ tenant }: { tenant: TenantPublico }) {
 
   const avancar = useCallback(
     (lead: Lead) => {
-      const i = statusList.indexOf(lead.status);
-      const proximo = statusList[Math.min(i + 1, statusList.length - 1)];
+      // proximaEtapa pula as etapas de perda: avançar nunca leva um negócio
+      // ganho para perdido, que é onde a soma por índice acabava
+      const proximo = proximaEtapa(lead.status, statusList);
       if (!proximo || proximo === lead.status) return;
       void salvar(lead.id, { status: proximo });
     },
@@ -632,6 +635,10 @@ export default function Painel({ tenant }: { tenant: TenantPublico }) {
           onFechar={() => setSelecionado(null)}
           onStatus={(s) => void salvar(leadAberto.id, { status: s })}
           onNota={(n) => void salvar(leadAberto.id, { nota: n })}
+          onValor={async (v) => {
+            const ok = await salvar(leadAberto.id, { valor: v });
+            if (ok) toast(v > 0 ? `Valor registrado: ${moedaExata(v)}` : "Valor removido.");
+          }}
         />
       )}
 

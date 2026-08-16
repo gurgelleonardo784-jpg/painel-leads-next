@@ -30,13 +30,25 @@ function criarPool(): Pool {
     );
   }
 
-  // Provedores gerenciados (Neon, Supabase, Railway) exigem TLS e usam
-  // certificado próprio; local não tem TLS nenhum.
   const local = /@(localhost|127\.0\.0\.1)[:/]/.test(url) || /sslmode=disable/.test(url);
+
+  /**
+   * TLS verificado de verdade, por padrão.
+   *
+   * Neon, Supabase e Railway usam certificado público válido, então a
+   * verificação completa funciona — e é ela que garante que o banco do outro
+   * lado é mesmo o seu. Desligar a verificação, que é o atalho comum, aceita
+   * qualquer certificado e deixa a conexão aberta a um intermediário, com as
+   * credenciais e os dados dos leads passando por ali.
+   *
+   * `DATABASE_SSL_INSEGURO=1` existe como escape para banco com certificado
+   * autoassinado (servidor próprio). É opt-in explícito, nunca o padrão.
+   */
+  const inseguro = process.env.DATABASE_SSL_INSEGURO === "1";
 
   return new Pool({
     connectionString: url,
-    ssl: local ? undefined : { rejectUnauthorized: false },
+    ssl: local ? undefined : inseguro ? { rejectUnauthorized: false } : true,
     // serverless abre muitos processos; poucas conexões por processo, e não
     // deixa nenhuma parada de graça segurando vaga no servidor
     max: Number(process.env.DATABASE_MAX_CONEXOES || 3),

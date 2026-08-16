@@ -637,12 +637,36 @@ export function calcular(
 
 /* ---------- formatação (compartilhada pelos dashboards) ---------- */
 
+/**
+ * Dinheiro para leitura de painel: acima de R$ 100 os centavos somem, porque
+ * "R$ 18.432" se lê melhor que "R$ 18.432,17" numa coluna de totais.
+ *
+ * Serve para soma e média. NÃO serve para o valor de um lead específico — ver
+ * `moedaExata`.
+ */
 export function moeda(v: number | null, cod = "BRL"): string {
   if (v === null || !Number.isFinite(v)) return "—";
   return new Intl.NumberFormat("pt-BR", {
     style: "currency",
     currency: cod,
     maximumFractionDigits: v >= 100 ? 0 : 2,
+  }).format(v);
+}
+
+/**
+ * Dinheiro com os centavos sempre.
+ *
+ * Para o valor de um negócio, o arredondamento do `moeda` mente: quem digita
+ * 3.450,75 e lê "R$ 3.451" acha que o sistema alterou o número dele — e a
+ * desconfiança se espalha para o resto do painel.
+ */
+export function moedaExata(v: number | null, cod = "BRL"): string {
+  if (v === null || !Number.isFinite(v)) return "—";
+  return new Intl.NumberFormat("pt-BR", {
+    style: "currency",
+    currency: cod,
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
   }).format(v);
 }
 

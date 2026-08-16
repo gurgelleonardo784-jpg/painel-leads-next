@@ -183,6 +183,8 @@ ALTER TABLE leads ADD COLUMN IF NOT EXISTS web_click_id BIGINT;
 -- apareceria como um único clique — e a discussão de primeiro contato contra
 -- último contato ficaria sem resposta.
 ALTER TABLE web_clicks ADD COLUMN IF NOT EXISTS visitor_id TEXT;
+-- o navegador do visitante: separa clique de pessoa de clique de robô
+ALTER TABLE web_clicks ADD COLUMN IF NOT EXISTS user_agent TEXT;
 CREATE INDEX IF NOT EXISTS web_clicks_visitante_idx ON web_clicks (client_id, visitor_id);
 
 -- ---------------------------------------------------------------------------
@@ -200,7 +202,7 @@ CREATE INDEX IF NOT EXISTS web_clicks_visitante_idx ON web_clicks (client_id, vi
 CREATE TABLE IF NOT EXISTS lead_events (
   id         BIGSERIAL PRIMARY KEY,
   lead_id    BIGINT NOT NULL REFERENCES leads(id) ON DELETE CASCADE,
-  -- etapa | anotacao | conversao | criado
+  -- etapa | anotacao | conversao | valor | criado
   tipo       TEXT NOT NULL,
   -- o que aquele tipo de evento precisa guardar (etapa nova, texto, resultado)
   dados      JSONB,

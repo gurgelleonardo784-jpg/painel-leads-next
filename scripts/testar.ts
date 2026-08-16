@@ -15,7 +15,8 @@
 import { extrairEventoWhatsApp } from "../lib/whatsapp";
 import { atribuicaoDoReferral, atribuicaoDoClique } from "../lib/atribuicao";
 import { classificarCanal, campanhaDosSinais, resumoUtm } from "../lib/canal";
-import { tokenNoTexto, gerarToken } from "../lib/cliques";
+import { proximaEtapa } from "../lib/apresentacao";
+import { codigoNoTexto, gerarCodigo, canalDoPrefixo } from "../lib/cliques";
 
 let falhas = 0;
 let passes = 0;
@@ -362,21 +363,84 @@ console.log("\nAtribuição a partir do clique no site");
   conferir("confiança baixa", nada.confianca, "low");
 }
 
-console.log("\nO código na mensagem");
+console.log("\nO código na mensagem — origem no prefixo");
 {
-  const t = gerarToken();
-  conferir("token tem 6 caracteres", t.length, 6);
-  conferir("token sem vogal (não forma palavra)", /[aeiou]/.test(t), false);
+  // cada tipo de origem tem que produzir o prefixo certo, porque é ele que
+  // sobrevive quando a gravação do clique falha
+  const casos: { nome: string; sinais: Parameters<typeof classificarCanal>[0]; prefixo: string }[] = [
+    { nome: "gclid", sinais: { gclid: "Cj0KCQ" }, prefixo: "PAG" },
+    { nome: "fbclid", sinais: { fbclid: "IwAR1" }, prefixo: "PAG" },
+    { nome: "utm_medium=cpc", sinais: { utmSource: "google", utmMedium: "cpc" }, prefixo: "PAG" },
+    { nome: "utm_medium=paid", sinais: { utmSource: "bing", utmMedium: "paid" }, prefixo: "PAG" },
+    { nome: "referrer instagram", sinais: { referrer: "https://www.instagram.com/" }, prefixo: "IG" },
+    { nome: "utm_source instagram", sinais: { utmSource: "instagram", utmMedium: "social" }, prefixo: "IG" },
+    { nome: "referrer facebook", sinais: { referrer: "https://www.facebook.com/" }, prefixo: "FB" },
+    { nome: "referrer google", sinais: { referrer: "https://www.google.com/search?q=x" }, prefixo: "ORG" },
+    { nome: "referrer bing", sinais: { referrer: "https://www.bing.com/search?q=x" }, prefixo: "ORG" },
+    { nome: "outro site", sinais: { referrer: "https://portaldedireito.com.br/artigo" }, prefixo: "REF" },
+    { nome: "sem referrer e sem utm", sinais: {}, prefixo: "DIR" },
+  ];
+
+  for (const c of casos) {
+    const codigo = gerarCodigo(classificarCanal(c.sinais), c.sinais);
+    conferir(`${c.nome} -> ${c.prefixo}`, codigo.split("-")[0], c.prefixo);
+  }
+
+  const exemplo = gerarCodigo(classificarCanal({ gclid: "x" }), { gclid: "x" });
+  conferir("formato PREFIXO-XXXX", /^[A-Z]{2,3}-[A-Z0-9]{4}$/.test(exemplo), true);
+  conferir("sufixo tem 4 caracteres", exemplo.split("-")[1].length, 4);
+  conferir("sem O, 0, I nem 1 no sufixo", /[O0I1]/.test(exemplo.split("-")[1]), false);
+
+  // o mesmo código nunca deve sair duas vezes seguidas
+  const muitos = new Set(Array.from({ length: 500 }, () => gerarCodigo("google_ads")));
+  conferir("500 códigos, nenhum repetido", muitos.size, 500);
+}
+
+console.log("\nAchar o código na mensagem recebida");
+{
   conferir(
-    "acha o código na mensagem",
-    tokenNoTexto("Olá! Vim pelo site e gostaria de mais informações. #bcd234"),
-    "bcd234"
+    "acha no fim da frase",
+    codigoNoTexto("Olá! Vim pelo site e quero informações. Ref: PAG-7K3M"),
+    "PAG-7K3M"
   );
-  conferir("acha no meio do texto", tokenNoTexto("oi #kmn789 tudo bem"), "kmn789");
-  conferir("maiúscula também", tokenNoTexto("oi #KMN789"), "kmn789");
-  conferir("sem código, vazio", tokenNoTexto("Olá, quero informações"), "");
-  conferir("hashtag comum não vira código", tokenNoTexto("#promocao"), "");
-  conferir("token do próprio gerador é reconhecido", tokenNoTexto(`teste #${t}`), t);
+  conferir("acha no meio", codigoNoTexto("oi ORG-4B9Z tudo bem"), "ORG-4B9Z");
+  conferir("minúscula também vale", codigoNoTexto("oi ig-4b9z"), "IG-4B9Z");
+  conferir("sem código, vazio", codigoNoTexto("Olá, quero informações"), "");
+  conferir("prefixo inexistente é ignorado", codigoNoTexto("veja XYZ-1234"), "");
+  conferir("sufixo curto demais é ignorado", codigoNoTexto("veja PAG-7K"), "");
+  conferir("o próprio gerador é reconhecido", (() => {
+    const c = gerarCodigo("google_organico");
+    return codigoNoTexto(`Olá! Vim pelo site. Ref: ${c}`) === c;
+  })(), true);
+
+  // a rede de segurança: código válido cujo clique não foi gravado
+  conferir("PAG sem linha no banco vira mídia paga", canalDoPrefixo("PAG-7K3M"), "pago");
+  conferir("ORG vira busca orgânica", canalDoPrefixo("ORG-4B9Z"), "busca_organica");
+  conferir("IG vira redes sociais", canalDoPrefixo("IG-4B9Z"), "social");
+  conferir("REF vira indicação", canalDoPrefixo("REF-4B9Z"), "referencia");
+  conferir("DIR vira desconhecido, não 'direto'", canalDoPrefixo("DIR-4B9Z"), "desconhecido");
+  conferir("prefixo inválido não vira canal", canalDoPrefixo("XXX-4B9Z"), null);
+}
+
+
+/* ---------- avançar etapa: ganho não pode virar perdido ---------- */
+
+console.log("\nAvançar etapa no funil");
+{
+  const funil = ["Novo", "Em contato", "Qualificado", "Ganho", "Perdido"];
+  conferir("Novo avança para Em contato", proximaEtapa("Novo", funil), "Em contato");
+  conferir("Qualificado avança para Ganho", proximaEtapa("Qualificado", funil), "Ganho");
+  // o bug que isto tranca: por índice, o próximo de "Ganho" era "Perdido", e um
+  // clique no card transformava venda fechada em negócio perdido
+  conferir("Ganho não avança para lugar nenhum", proximaEtapa("Ganho", funil), null);
+  conferir("Perdido não avança", proximaEtapa("Perdido", funil), null);
+
+  const renomeado = ["Recebido", "Em atendimento", "Fechado", "Descartado"];
+  conferir("reconhece perda renomeada", proximaEtapa("Fechado", renomeado), null);
+  conferir("etapa desconhecida cai na primeira", proximaEtapa("Sei lá", funil), "Novo");
+
+  const semPerda = ["Novo", "Contato", "Fechado"];
+  conferir("funil sem etapa de perda funciona", proximaEtapa("Contato", semPerda), "Fechado");
 }
 
 console.log(`\n${passes} passaram, ${falhas} falharam\n`);

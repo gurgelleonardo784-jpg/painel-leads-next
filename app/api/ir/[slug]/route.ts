@@ -1,7 +1,8 @@
+import { after } from "next/server";
 import { getTenant } from "@/lib/tenants";
 import { bancoConfigurado } from "@/lib/db";
-import { registrarClique } from "@/lib/cliques";
-import { ROTULO_CANAL, type SinaisDeOrigem } from "@/lib/canal";
+import { registrarClique, gerarCodigo } from "@/lib/cliques";
+import { classificarCanal, ROTULO_CANAL, type SinaisDeOrigem } from "@/lib/canal";
 import { registrar } from "@/lib/registro";
 
 /**
@@ -72,32 +73,40 @@ export async function GET(req: Request, ctx: { params: Promise<{ slug: string }>
     landing: sp.get("landing") || "",
   };
 
-  let texto = textoBase;
+  /**
+   * O código é gerado aqui, sem tocar no banco.
+   *
+   * Antes esta rota esperava a gravação terminar para só então redirecionar — e
+   * com o Postgres hibernando (plano gratuito do Neon acorda em 1-3s), isso era
+   * uma tela branca antes do WhatsApp abrir. Gente desiste nesse tempo.
+   *
+   * Como a origem viaja no prefixo do código, a gravação virou opcional: ela
+   * acrescenta detalhe (campanha, palavra-chave, página), mas se falhar o lead
+   * ainda chega sabendo se veio de mídia paga, de busca ou de indicação.
+   */
+  const canal = classificarCanal(sinais);
+  const codigo = gerarCodigo(canal, sinais);
+  const texto = `${textoBase} Ref: ${codigo}`;
 
+  registrar("clique_site", { cliente: slug, canal, rotulo: ROTULO_CANAL[canal] });
+
+  // grava depois da resposta: o visitante não espera por isto
   if (bancoConfigurado()) {
-    try {
-      const clique = await registrarClique(
-        slug,
-        sinais,
-        tenant.nome,
-        sp.get("vid") || "" // identificador do visitante, para amarrar a jornada
-      );
-      if (clique) {
-        texto = `${textoBase} #${clique.token}`;
-        registrar("clique_site", {
+    after(async () => {
+      try {
+        await registrarClique(slug, sinais, codigo, canal, {
+          nomeCliente: tenant.nome,
+          visitanteId: sp.get("vid") || "",
+          userAgent: req.headers.get("user-agent") || "",
+        });
+      } catch (e) {
+        registrar("banco_indisponivel", {
           cliente: slug,
-          canal: clique.canal,
-          rotulo: ROTULO_CANAL[clique.canal],
+          detalhe: "clique do site não gravado — o prefixo do código ainda carrega a origem",
+          erro: e instanceof Error ? e.message : String(e),
         });
       }
-    } catch (e) {
-      // segue sem código: a pessoa chega no WhatsApp, o lead entra sem origem
-      registrar("banco_indisponivel", {
-        cliente: slug,
-        detalhe: "clique do site não registrado",
-        erro: e instanceof Error ? e.message : String(e),
-      });
-    }
+    });
   }
 
   return new Response(null, {

@@ -22,7 +22,13 @@ import {
   buscarEstruturaAnuncio,
   type Atribuicao,
 } from "./atribuicao";
-import { tokenNoTexto, acharClique, marcarCliqueUsado, cliqueParaAtribuir } from "./cliques";
+import {
+  codigoNoTexto,
+  acharClique,
+  marcarCliqueUsado,
+  cliqueParaAtribuir,
+  canalDoPrefixo,
+} from "./cliques";
 import { ROTULO_CANAL, type Canal } from "./canal";
 import { tokenDeAnuncios } from "./metaAds";
 import { bancoConfigurado } from "./db";
@@ -106,15 +112,42 @@ async function atribuicaoDaConversa(
   const daMeta = atribuicaoDaMensagem(m);
   if (m.referral || daMeta.ctwaClid) return daMeta;
 
-  const token = tokenNoTexto(m.texto);
+  const token = codigoNoTexto(m.texto);
   if (!token) return daMeta;
 
   const clique = await acharClique(tenant.slug, token);
   if (!clique) {
-    // token inventado, expirado, ou mensagem copiada de outra conversa.
-    // Não vira origem nenhuma — melhor sem atribuição que com a errada.
-    registrar("clique_nao_encontrado", { cliente: tenant.slug, messageId: m.id });
-    return daMeta;
+    /**
+     * Sem a linha do clique, o prefixo do código ainda diz de onde veio.
+     *
+     * Acontece quando a gravação falhou (o redirect não espera por ela) ou
+     * quando o clique já passou da janela de 72h. O prefixo é um sinal mais
+     * fraco — `PAG` não distingue Google de Meta, e não traz campanha nem
+     * palavra-chave — mas é sinal de verdade, não chute: foi esta rota que o
+     * escreveu no momento do clique.
+     *
+     * Marcado com confiança baixa para ninguém confundir com atribuição
+     * completa. Se o prefixo for inválido, aí sim não vira origem nenhuma.
+     */
+    const canal = canalDoPrefixo(token);
+    registrar("clique_nao_encontrado", {
+      cliente: tenant.slug,
+      messageId: m.id,
+      codigo: token,
+      canalPeloPrefixo: canal,
+    });
+    if (!canal) return daMeta;
+
+    return {
+      fonte: canal as Atribuicao["fonte"],
+      status: canal === "desconhecido" ? "unknown" : "attributed",
+      metodo: "site_click",
+      confianca: "low",
+      sourceType: "",
+      sourceUrl: "",
+      adId: "",
+      ctwaClid: "",
+    };
   }
 
   // o crédito pode ser de um clique anterior: quem veio pelo anúncio e voltou

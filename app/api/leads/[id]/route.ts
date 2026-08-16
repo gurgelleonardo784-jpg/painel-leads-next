@@ -43,6 +43,11 @@ export async function PATCH(req: Request, ctx: { params: Promise<{ id: string }>
   const campos: SalvarCampos = {};
   if (typeof body.status !== "undefined") campos.status = String(body.status);
   if (typeof body.nota !== "undefined") campos.nota = String(body.nota);
+  if (typeof body.valor !== "undefined") {
+    // negativo ou lixo vira 0, que limpa a célula em vez de gravar besteira
+    const n = Number(body.valor);
+    campos.valor = Number.isFinite(n) && n > 0 ? n : 0;
+  }
 
   try {
     const res = await salvarLead(tenant, id, campos);
@@ -58,6 +63,9 @@ export async function PATCH(req: Request, ctx: { params: Promise<{ id: string }>
         await registrarEventoPelaPlanilha(tenant.slug, id, "anotacao", {
           texto: campos.nota.trim().slice(0, 500),
         });
+      }
+      if (typeof campos.valor !== "undefined") {
+        await registrarEventoPelaPlanilha(tenant.slug, id, "valor", { valor: campos.valor });
       }
     }
 

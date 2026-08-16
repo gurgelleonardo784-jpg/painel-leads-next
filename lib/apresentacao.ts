@@ -112,6 +112,36 @@ export function etapas(statusList: string[]): Etapa[] {
   return statusList.map((s) => ({ chave: s, rotulo: s, cor: corDoStatus(s, statusList) }));
 }
 
+/**
+ * Etapa de desfecho negativo — perder o lead não é progredir nele.
+ *
+ * Reconhecida pelo nome, e não pela posição, porque o cliente pode renomear
+ * ("Descartado", "Desqualificado") ou reordenar as etapas dele.
+ */
+export function ehEtapaPerdida(status: string): boolean {
+  return /perdid|descartad|desqualific|cancelad/.test(normal(status));
+}
+
+/**
+ * A próxima etapa ao avançar um lead, ou `null` quando não há para onde ir.
+ *
+ * Pular as etapas de perda é o ponto todo desta função. A lista de etapas
+ * parece uma fila, mas o fim dela não é: "Ganho" e "Perdido" são desfechos
+ * opostos, não passos consecutivos. Avançando pelo índice, o botão de avançar
+ * levava um negócio **ganho** para **perdido** — um clique errado apagando a
+ * informação mais valiosa do painel, sem confirmação e sem desfazer.
+ *
+ * Perder um lead continua possível, mas só como escolha explícita no detalhe.
+ */
+export function proximaEtapa(atual: string, statusList: string[]): string | null {
+  const i = statusList.indexOf(atual);
+  if (i === -1) return statusList[0] ?? null;
+  for (let j = i + 1; j < statusList.length; j++) {
+    if (!ehEtapaPerdida(statusList[j])) return statusList[j];
+  }
+  return null;
+}
+
 /* ---------- tipo do lead ---------- */
 
 export const ROTULO_TIPO: Record<TipoLead, string> = {

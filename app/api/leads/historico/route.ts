@@ -24,7 +24,7 @@ export const dynamic = "force-dynamic";
 
 /** Um item da linha do tempo, já em linguagem de negócio. */
 type Item = {
-  tipo: "visita" | "mensagem" | "etapa" | "anotacao" | "conversao";
+  tipo: "visita" | "mensagem" | "etapa" | "anotacao" | "conversao" | "valor";
   em: string;
   titulo: string;
   detalhe?: string;
@@ -102,6 +102,16 @@ export async function GET(req: Request) {
         });
       } else if (e.tipo === "anotacao") {
         itens.push({ tipo: "anotacao", em: e.em, titulo: "Anotação", detalhe: String(e.dados.texto || "") });
+      } else if (e.tipo === "valor") {
+        const v = Number(e.dados.valor) || 0;
+        itens.push({
+          tipo: "valor",
+          em: e.em,
+          titulo:
+            v > 0
+              ? `Valor do negócio: ${v.toLocaleString("pt-BR", { style: "currency", currency: "BRL" })}`
+              : "Valor do negócio removido",
+        });
       } else if (e.tipo === "conversao") {
         itens.push({
           tipo: "conversao",
@@ -120,7 +130,8 @@ export async function GET(req: Request) {
       mensagem: 1,
       etapa: 2,
       anotacao: 3,
-      conversao: 4,
+      valor: 4,
+      conversao: 5,
     };
     itens.sort((a, b) => a.em.localeCompare(b.em) || PESO[a.tipo] - PESO[b.tipo]);
 

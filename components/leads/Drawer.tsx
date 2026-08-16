@@ -2,35 +2,6 @@
 
 import { useEffect, useRef, useState } from "react";
 import type { Lead } from "@/lib/types";
-
-/** Um item da linha do tempo, como o /api/leads/historico devolve. */
-type ItemHistorico = {
-  tipo: "visita" | "mensagem" | "etapa" | "anotacao" | "conversao";
-  em: string;
-  titulo: string;
-  detalhe?: string;
-  direcao?: string;
-  destaque?: boolean;
-};
-
-/**
- * O que interessa ao cliente dentro do resumo de UTM é a palavra pesquisada.
- * "source=google · medium=cpc · term=advogado trabalhista" é linguagem de
- * ferramenta; "advogado trabalhista" é a informação.
- */
-function textoDaBusca(utm: string): string {
-  const m = utm.match(/term=([^·]+)/);
-  return (m ? m[1] : utm).trim();
-}
-
-/** O ponto colorido de cada tipo de evento na linha do tempo. */
-const COR_EVENTO: Record<ItemHistorico["tipo"], string> = {
-  visita: "var(--canal-google)",
-  mensagem: "var(--tipo-whats)",
-  etapa: "var(--etapa-qualificado)",
-  anotacao: "var(--txt5)",
-  conversao: "var(--canal-meta)",
-};
 import { tipoDoLead } from "@/lib/types";
 import {
   fmtTelefone,
@@ -44,8 +15,38 @@ import {
   ROTULO_TIPO,
   COR_TIPO,
 } from "@/lib/apresentacao";
-import { moeda } from "@/lib/metricas";
+import { moedaExata } from "@/lib/metricas";
 import { Fechar, Telefone, Envelope, Whatsapp } from "../Icones";
+
+/** Um item da linha do tempo, como o /api/leads/historico devolve. */
+type ItemHistorico = {
+  tipo: "visita" | "mensagem" | "etapa" | "anotacao" | "conversao" | "valor";
+  em: string;
+  titulo: string;
+  detalhe?: string;
+  direcao?: string;
+  destaque?: boolean;
+};
+
+/** O ponto colorido de cada tipo de evento na linha do tempo. */
+const COR_EVENTO: Record<ItemHistorico["tipo"], string> = {
+  visita: "var(--canal-google)",
+  mensagem: "var(--tipo-whats)",
+  etapa: "var(--etapa-qualificado)",
+  anotacao: "var(--txt5)",
+  valor: "var(--etapa-ganho)",
+  conversao: "var(--canal-meta)",
+};
+
+/**
+ * O que interessa ao cliente dentro do resumo de UTM é a palavra pesquisada.
+ * "source=google · medium=cpc · term=advogado trabalhista" é linguagem de
+ * ferramenta; "advogado trabalhista" é a informação.
+ */
+function textoDaBusca(utm: string): string {
+  const m = utm.match(/term=([^·]+)/);
+  return (m ? m[1] : utm).trim();
+}
 
 /**
  * Detalhe do lead, em painel lateral.
@@ -62,6 +63,7 @@ export default function Drawer({
   onFechar,
   onStatus,
   onNota,
+  onValor,
 }: {
   lead: Lead;
   slug: string;
@@ -69,10 +71,48 @@ export default function Drawer({
   onFechar: () => void;
   onStatus: (status: string) => void;
   onNota: (nota: string) => void;
+  onValor: (valor: number) => Promise<void> | void;
 }) {
   const [nota, setNota] = useState(lead.nota);
   const [salvo, setSalvo] = useState("");
   const painel = useRef<HTMLDivElement | null>(null);
+
+  const [editandoValor, setEditandoValor] = useState(false);
+  const [valorTexto, setValorTexto] = useState("");
+
+  function abrirEdicaoValor() {
+    // abre já com o valor atual, no formato que o brasileiro digita
+    setValorTexto(lead.valor > 0 ? String(lead.valor).replace(".", ",") : "");
+    setEditandoValor(true);
+  }
+
+  function cancelarValor() {
+    setEditandoValor(false);
+    setValorTexto("");
+  }
+
+  /**
+   * Aceita "1.500,50", "1500,50" e "1500.50".
+   *
+   * Quem digita valor em português usa vírgula decimal e ponto de milhar; quem
+   * copia de outro sistema costuma trazer ponto decimal. Rejeitar qualquer um
+   * dos dois seria uma armadilha silenciosa — o número entra errado por dez.
+   */
+  function lerValor(txt: string): number {
+    const limpo = txt.replace(/[^\d,.-]/g, "").trim();
+    if (!limpo) return 0;
+    const temVirgula = limpo.includes(",");
+    const normalizado = temVirgula ? limpo.replace(/\./g, "").replace(",", ".") : limpo;
+    const n = Number(normalizado);
+    return Number.isFinite(n) && n > 0 ? n : 0;
+  }
+
+  async function salvarValor() {
+    const n = lerValor(valorTexto);
+    setEditandoValor(false);
+    if (n === lead.valor) return;
+    await onValor(n);
+  }
 
   const atrib = lead.atribuicao;
   const temConversa = !!atrib && atrib.mensagens > 0;
@@ -246,9 +286,11 @@ export default function Drawer({
             )}
           </section>
 
-          {/* origem publicitária: campanha, conjunto e anúncio (§25) */}
-          {(lead.campanha || lead.conjunto || lead.anuncio || lead.utm || atrib) && (
-            <section className="caixa caixa-sutil" style={{ gap: 10 }}>
+          {/* Origem do lead, sempre visível.
+              Esconder o bloco quando não há rastreamento deixa quem abre o lead
+              sem saber se a origem é desconhecida ou se o painel não mostra —
+              e a pergunta "de onde veio?" é a razão de abrir. */}
+          <section className="caixa caixa-sutil" style={{ gap: 10 }}>
               <div className="secao-cab">
                 <span className="secao-titulo">Origem do lead</span>
                 {atrib && (
@@ -292,6 +334,14 @@ export default function Drawer({
                   Chegou sem passar por anúncio — não há campanha a atribuir.
                 </p>
               )}
+              {/* nem rastreamento nem campanha na planilha: dizer o porquê, em
+                  vez de deixar três traços sem explicação */}
+              {!atrib && !lead.campanha && !lead.anuncio && (
+                <p className="secao-meta" style={{ lineHeight: 1.5 }}>
+                  Sem origem registrada. Lead de anúncio traz a campanha sozinho — este aqui
+                  entrou pela planilha ou por cadastro manual, antes do rastreamento.
+                </p>
+              )}
 
               {/* Identificadores técnicos (ctwa_clid, gclid) ficam fora desta tela:
                   quem a abre é o cliente final, e código de rastreio ali só gera
@@ -303,15 +353,60 @@ export default function Drawer({
                   <span className="atrib-valor">{textoDaBusca(lead.utm)}</span>
                 </div>
               )}
-            </section>
-          )}
+          </section>
 
-          {lead.valor > 0 && (
-            <section className="caixa caixa-sutil">
+          {/* valor do negócio — editável, porque é o número que fecha a conta
+              do anúncio: sem ele o painel mostra custo e não mostra retorno */}
+          <section className="caixa caixa-sutil">
+            <div className="secao-cab">
               <span className="secao-titulo">Valor do negócio</span>
-              <span style={{ fontSize: 17, fontWeight: 600 }}>{moeda(lead.valor)}</span>
-            </section>
-          )}
+              {lead.valor > 0 && !editandoValor && (
+                <span className="secao-meta">registrado</span>
+              )}
+            </div>
+
+            {editandoValor ? (
+              <div className="valor-edicao">
+                <span className="prefixo">R$</span>
+                <input
+                  className="campo-valor"
+                  inputMode="decimal"
+                  autoFocus
+                  value={valorTexto}
+                  placeholder="0,00"
+                  onChange={(e) => setValorTexto(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") void salvarValor();
+                    if (e.key === "Escape") cancelarValor();
+                  }}
+                />
+                <button className="btn btn-primario" onClick={() => void salvarValor()}>
+                  Salvar
+                </button>
+                <button className="btn" onClick={cancelarValor}>
+                  Cancelar
+                </button>
+              </div>
+            ) : (
+              <div className="valor-linha">
+                <span className={`valor-numero${lead.valor > 0 ? "" : " vazio-valor"}`}>
+                  {lead.valor > 0 ? moedaExata(lead.valor) : "Nenhum valor informado"}
+                </span>
+                {!lead.somenteLeitura && (
+                  <button className="btn" onClick={abrirEdicaoValor}>
+                    {lead.valor > 0 ? "Alterar" : "Informar valor"}
+                  </button>
+                )}
+              </div>
+            )}
+
+            {lead.valor === 0 && !editandoValor && (
+              <span className="secao-meta" style={{ lineHeight: 1.5 }}>
+                Preencha ao fechar o negócio. É o que permite o painel calcular receita,
+                ticket médio e retorno do anúncio.
+              </span>
+            )}
+          </section>
 
           {/* etapa */}
           <section className="drawer-secao">
