@@ -17,7 +17,7 @@ import { consultar, emTransacao, MensagemDuplicada } from "./db";
 import type { Atribuicao } from "./atribuicao";
 import type { EstruturaAnuncio } from "./atribuicao";
 import type { MensagemWhatsApp } from "./whatsapp";
-import type { Tenant } from "./tenants";
+import { FUSO_PADRAO, type Tenant } from "./tenants";
 import type { AtribuicaoLead, MensagemLead, Lead } from "./types";
 import { registrar, mascararTelefone } from "./registro";
 
@@ -610,7 +610,11 @@ export async function atribuicaoPorTelefone(
  * há linha onde gravá-las. O painel mostra o motivo em vez de oferecer um botão
  * que falharia.
  */
-export async function leadsDoBanco(slug: string, ddiPadrao = "55"): Promise<Lead[]> {
+export async function leadsDoBanco(
+  slug: string,
+  ddiPadrao = "55",
+  tz = FUSO_PADRAO
+): Promise<Lead[]> {
   const rows = await consultar<{
     id: Id;
     name: string;
@@ -653,7 +657,7 @@ export async function leadsDoBanco(slug: string, ddiPadrao = "55"): Promise<Lead
       nome: r.name || "",
       telefone: r.phone,
       email: r.email || "",
-      data: r.first_message_at ? dataBr(r.first_message_at) : "",
+      data: r.first_message_at ? dataBr(r.first_message_at, tz) : "",
       origem: origemDaFonte(r.attribution_source),
       campanha: r.campaign_name || "",
       conjunto: r.adset_name || "",
@@ -690,9 +694,17 @@ export async function leadsDoBanco(slug: string, ddiPadrao = "55"): Promise<Lead
   });
 }
 
-/** "08/08/2026 10:31" — o mesmo formato que a planilha usa, para o parseData ler. */
-function dataBr(d: Date): string {
+/**
+ * "08/08/2026 10:31" — o mesmo formato que a planilha usa, para o parseData ler.
+ *
+ * O fuso é obrigatório e vem do cliente. Sem ele, o Intl usa o relógio do
+ * servidor, que na Vercel é UTC: um lead que mandou mensagem às 22h de São
+ * Paulo apareceria no painel como 1h do dia seguinte — data errada, e no dia
+ * errado, o que estraga também o filtro de período e o gráfico por dia.
+ */
+function dataBr(d: Date, tz: string): string {
   const p = new Intl.DateTimeFormat("pt-BR", {
+    timeZone: tz,
     day: "2-digit",
     month: "2-digit",
     year: "numeric",

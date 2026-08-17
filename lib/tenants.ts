@@ -96,6 +96,19 @@ export type Tenant = {
 
 const STATUS_PADRAO = ["Novo", "Em contato", "Qualificado", "Ganho", "Perdido"];
 
+/**
+ * O fuso usado para carimbar data de lead e de conversão.
+ *
+ * `APP_TZ`, não `TZ`: a Vercel recusa `TZ` por ser nome reservado da
+ * plataforma. E o padrão está fixo aqui em vez de vir do relógio do servidor —
+ * em produção esse relógio é UTC, e um lead que chega às 22h de São Paulo
+ * apareceria carimbado como 1h do dia seguinte.
+ *
+ * Cada cliente pode ter o seu, pelo campo `tz` do cadastro, para quem atende em
+ * outro fuso.
+ */
+export const FUSO_PADRAO = process.env.APP_TZ || "America/Sao_Paulo";
+
 function normalizarTenant(raw: Record<string, unknown>): Tenant {
   return {
     slug: String(raw.slug || ""),
@@ -107,7 +120,7 @@ function normalizarTenant(raw: Record<string, unknown>): Tenant {
     ddiPadrao: String(raw.ddiPadrao || "55"),
     chaveWebhook: String(raw.chaveWebhook || ""),
     status: Array.isArray(raw.status) && raw.status.length ? (raw.status as string[]) : STATUS_PADRAO,
-    tz: String(raw.tz || process.env.TZ || "America/Sao_Paulo"),
+    tz: String(raw.tz || FUSO_PADRAO),
     conversoes: raw.conversoes ? (raw.conversoes as ConversoesConfig) : undefined,
     metaLeadgen: raw.metaLeadgen ? (raw.metaLeadgen as MetaLeadgenConfig) : undefined,
     whatsapp: raw.whatsapp ? (raw.whatsapp as WhatsappConfig) : undefined,

@@ -87,7 +87,7 @@ export async function carregarLeadsDoPainel(tenant: Tenant): Promise<LeadsDoPain
   const naPlanilha = new Set<string>();
   for (const l of comAtribuicao) for (const k of chaves(l.telefone)) naPlanilha.add(k);
 
-  const soNoBanco = (await leadsDoBanco(tenant.slug, tenant.ddiPadrao))
+  const soNoBanco = (await leadsDoBanco(tenant.slug, tenant.ddiPadrao, tenant.tz))
     .filter((l) => !chaves(l.telefone).some((k) => naPlanilha.has(k)))
     // sem etapa não cairiam em nenhuma coluna do pipeline; a primeira é onde um
     // lead novo entra mesmo
